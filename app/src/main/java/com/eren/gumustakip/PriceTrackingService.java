@@ -10,7 +10,6 @@ import android.content.SharedPreferences;
 import android.os.Build;
 import android.os.IBinder;
 
-
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.Locale;
@@ -27,7 +26,6 @@ public class PriceTrackingService extends Service {
     private volatile boolean running = false;
     private Double lastSell = null;
     private SharedPreferences prefs;
-    private MainActivity activityRef;
 
     @Override public void onCreate() {
         super.onCreate();
@@ -52,6 +50,16 @@ public class PriceTrackingService extends Service {
                 double cost = parse(prefs.getString("cost", "0"));
                 String ts = new SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(new Date());
                 updateForeground(String.format(Locale.US, "Satış %.4f TL · Alış %.4f TL · %s", r.sell, r.buy, ts));
+                
+                // UI (Arayüz) güncellemesi için Broadcast gönderiyoruz
+                Intent updateIntent = new Intent("com.eren.gumustakip.UPDATE_UI");
+                updateIntent.putExtra("sell", r.sell);
+                updateIntent.putExtra("buy", r.buy);
+                updateIntent.putExtra("grams", grams);
+                updateIntent.putExtra("cost", cost);
+                updateIntent.putExtra("ts", ts);
+                sendBroadcast(updateIntent);
+
                 if (!Double.isNaN(r.sell)) {
                     notifyLevelChange(r.sell, r.buy, grams, cost);
                 }
