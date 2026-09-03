@@ -1,20 +1,21 @@
-# Gümüş Takip — Android
+# Gümüş Takip Uygulaması (Android)
 
-Bu proje Java + Android Gradle Plugin tabanlı bağımsız bir Android uygulamasıdır.
+GetirFinans üzerinden anlık XAG (gümüş) fiyatlarını takip eden, belirli TL seviyesi değişimlerinde sesli, titreşimli ve LED destekli bildirim gönderen, arka planda kesintisiz çalışan bir Android uygulamasıdır.
 
-## İşlevler
-- GetirFinans sayfasından XAG/gümüş alış-satış fiyatını HTTPS üzerinden almaya çalışır.
-- 60 saniyede bir fiyat kontrolü yapar.
-- Gram ve alış maliyetine göre portföy değeri ile kâr/zararı hesaplar.
-- Satış fiyatının tam TL seviyesi değiştiğinde bildirim üretir.
-- Arka planda foreground service ile çalışır.
-- Termux veya Python gerektirmez.
+## Özellikler
+* **Arka Plan Takibi:** `ForegroundService` ve `WakeLock` desteğiyle uygulama ve cihaz uykudayken bile çalışmaya devam eder.
+* **Seviye Alarmları:** Satış fiyatının tam TL seviyesi değiştiğinde yüksek öncelikli (`IMPORTANCE_HIGH`) bildirim tetikler. 60 saniyelik normal güncellemeler ise sessiz yürütülür.
+* **Portföy Yönetimi:** Kullanıcının girdiği gram ve maliyet değerlerine göre anlık kar/zarar hesaplaması yapar.
+* **Veri Kalıcılığı:** Girdiler ve son anlık veriler `SharedPreferences` ile dahili hafızada saklanır; uygulama kapatılıp açılsa bile kaybolmaz.
 
-## APK oluşturma
-1. Android Studio'da bu klasörü açın.
-2. Android SDK'nın kurulu olduğundan emin olun (compileSdk 33).
-3. Gradle senkronizasyonunu çalıştırın.
-4. `Build > Build APK(s)` seçin.
-5. APK genellikle `app/build/outputs/apk/debug/app-debug.apk` altında oluşur.
+## Kullanılan İzinler
+* `INTERNET`: Fiyat verilerini çekmek için.
+* `POST_NOTIFICATIONS`: Bildirim göndermek için (Android 13+).
+* `FOREGROUND_SERVICE` & `DATA_SYNC`: Arka planda kesintisiz servis çalıştırabilmek için.
+* `RECEIVE_BOOT_COMPLETED` & `WAKE_LOCK`: Cihaz yeniden başladığında tetiklenme ve uykuda kalma yönetimi için.
+* `REQUEST_IGNORE_BATTERY_OPTIMIZATIONS`: Pil kısıtlamalarına takılmadan arka planda çalışabilmek için.
 
-`local.properties` makineye özel SDK yolu içermeyecek şekilde temizlenmiştir.
+## Kurulum ve Çalıştırma
+1. Projeyi klonlayın veya indirin.
+2. Android Studio içerisinden projeyi açın.
+3. Uygulamayı derleyip cihazınıza kurun ve "Takibi Başlat" butonuna basarak pil optimizasyonu muafiyetine onay verin.
