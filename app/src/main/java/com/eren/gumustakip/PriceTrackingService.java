@@ -53,7 +53,7 @@ public class PriceTrackingService extends Service {
                 double cost = parse(prefs.getString("cost", "0"));
                 String ts = new SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(new Date());
                 
-                // Anlık verileri kalıcı hafızaya kaydediyoruz (Uygulama kapansa bile silinmez)
+                // Anlık verileri kalıcı hafızaya kaydediyoruz (Uygulama kapansa bile silinmez)[cite: 3]
                 prefs.edit()
                     .putFloat("last_sell", (float) r.sell)
                     .putFloat("last_buy", (float) r.buy)
@@ -107,14 +107,21 @@ public class PriceTrackingService extends Service {
         Intent i = new Intent(this, MainActivity.class);
         PendingIntent pi = PendingIntent.getActivity(this, 0, i, PendingIntent.FLAG_UPDATE_CURRENT | (Build.VERSION.SDK_INT >= 23 ? PendingIntent.FLAG_IMMUTABLE : 0));
         Notification.Builder b = Build.VERSION.SDK_INT >= 26 ? new Notification.Builder(this, channelId) : new Notification.Builder(this);
-        return b.setSmallIcon(android.R.drawable.ic_menu_info_details)
+        
+        Notification.Builder builder = b.setSmallIcon(android.R.drawable.ic_menu_info_details)
                 .setContentTitle(title)
                 .setContentText(text)
                 .setStyle(new Notification.BigTextStyle().bigText(text))
                 .setContentIntent(pi)
                 .setOngoing(channelId.equals(CHANNEL_STATUS_ID))
-                .setOnlyAlertOnce(true)
-                .build();
+                .setOnlyAlertOnce(true);
+
+        if (channelId.equals(CHANNEL_ALERT_ID)) {
+            builder.setDefaults(Notification.DEFAULT_VIBRATE | Notification.DEFAULT_SOUND | Notification.DEFAULT_LIGHTS);
+            builder.setLights(android.graphics.Color.GREEN, 1000, 1000);
+        }
+
+        return builder.build();
     }
 
     private void updateForeground(String text) {
@@ -132,6 +139,10 @@ public class PriceTrackingService extends Service {
 
             NotificationChannel alertChannel = new NotificationChannel(CHANNEL_ALERT_ID, "Gümüş Seviye Alarmları", NotificationManager.IMPORTANCE_HIGH);
             alertChannel.setDescription("Fiyat seviye değişim bildirimleri");
+            alertChannel.enableVibration(true);
+            alertChannel.setVibrationPattern(new long[]{0, 500, 250, 500});
+            alertChannel.enableLights(true);
+            alertChannel.setLightColor(android.graphics.Color.GREEN);
             nm.createNotificationChannel(alertChannel);
         }
     }
