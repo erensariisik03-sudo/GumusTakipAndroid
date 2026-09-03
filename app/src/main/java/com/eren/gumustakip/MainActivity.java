@@ -52,6 +52,9 @@ public class MainActivity extends Activity {
         buildUi();
         loadSavedInputs();
         requestNotificationPermission();
+        
+        // Uygulama açıldığında hafızadaki son anlık verileri ekrana yükler
+        loadSavedLiveData();
     }
 
     @Override
@@ -106,7 +109,7 @@ public class MainActivity extends Activity {
         addLabel(live, "ANLIK VERİ");
         priceView = text("Satış: —\nAlış: —", 21, Color.WHITE, true);
         live.addView(priceView, matchWrap(0));
-        portfolioView = text("Portföy: —\nKar/Zarar: —", 16, Color.LTGRAY, false);
+        portfolioView = text("Portföy: —\nKar/Zarار: —", 16, Color.LTGRAY, false);
         live.addView(portfolioView, matchWrap(0));
         updateView = text("Son kontrol: —", 13, Color.GRAY, false);
         live.addView(updateView, matchWrap(0));
@@ -123,33 +126,33 @@ public class MainActivity extends Activity {
         setContentView(scroll);
     }
 
-private void startTracking() {
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-        String packageName = getPackageName();
-        android.os.PowerManager pm = (android.os.PowerManager) getSystemService(POWER_SERVICE);
-        if (!pm.isIgnoringBatteryOptimizations(packageName)) {
-            Intent batteryIntent = new Intent();
-            batteryIntent.setAction(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS);
-            batteryIntent.setData(android.net.Uri.parse("package:" + packageName));
-            startActivity(batteryIntent);
-            Toast.makeText(this, "Lütfen pil optimizasyonunu kapatın.", Toast.LENGTH_LONG).show();
+    private void startTracking() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            String packageName = getPackageName();
+            android.os.PowerManager pm = (android.os.PowerManager) getSystemService(POWER_SERVICE);
+            if (!pm.isIgnoringBatteryOptimizations(packageName)) {
+                Intent batteryIntent = new Intent();
+                batteryIntent.setAction(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS);
+                batteryIntent.setData(android.net.Uri.parse("package:" + packageName));
+                startActivity(batteryIntent);
+                Toast.makeText(this, "Lütfen pil optimizasyonunu kapatın.", Toast.LENGTH_LONG).show();
+                return;
+            }
+        }
+
+        double grams = parse(gramInput.getText().toString());
+        double cost = parse(costInput.getText().toString());
+        if (grams < 0 || cost < 0) {
+            Toast.makeText(this, "Değerleri kontrol et.", Toast.LENGTH_SHORT).show();
             return;
         }
+        prefs.edit().putString("grams", String.valueOf(grams)).putString("cost", String.valueOf(cost)).apply();
+        Intent i = new Intent(this, PriceTrackingService.class);
+        i.setAction(PriceTrackingService.ACTION_START);
+        if (Build.VERSION.SDK_INT >= 26) startForegroundService(i); else startService(i);
+        statusView.setText("Takip durumu: aktif");
+        Toast.makeText(this, "Gümüş takibi başlatıldı.", Toast.LENGTH_SHORT).show();
     }
-
-    double grams = parse(gramInput.getText().toString());
-    double cost = parse(costInput.getText().toString());
-    if (grams < 0 || cost < 0) {
-        Toast.makeText(this, "Değerleri kontrol et.", Toast.LENGTH_SHORT).show();
-        return;
-    }
-    prefs.edit().putString("grams", String.valueOf(grams)).putString("cost", String.valueOf(cost)).apply();
-    Intent i = new Intent(this, PriceTrackingService.class);
-    i.setAction(PriceTrackingService.ACTION_START);
-    if (Build.VERSION.SDK_INT >= 26) startForegroundService(i); else startService(i);
-    statusView.setText("Takip durumu: aktif");
-    Toast.makeText(this, "Gümüş takibi başlatıldı.", Toast.LENGTH_SHORT).show();
-}
 
     private void stopTracking() {
         Intent i = new Intent(this, PriceTrackingService.class);
@@ -162,6 +165,18 @@ private void startTracking() {
     private void loadSavedInputs() {
         gramInput.setText(prefs.getString("grams", ""));
         costInput.setText(prefs.getString("cost", ""));
+    }
+
+    private void loadSavedLiveData() {
+        float sell = prefs.getFloat("last_sell", 0);
+        float buy = prefs.getFloat("last_buy", 0);
+        String ts = prefs.getString("last_ts", "—");
+        
+        if (sell > 0) {
+            double grams = parse(gramInput.getText().toString());
+            double cost = parse(costInput.getText().toString());
+            showLive(buy, sell, grams, cost, ts);
+        }
     }
 
     private void requestNotificationPermission() {
