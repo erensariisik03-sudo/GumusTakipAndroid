@@ -52,6 +52,14 @@ public class PriceTrackingService extends Service {
                 double grams = parse(prefs.getString("grams", "0"));
                 double cost = parse(prefs.getString("cost", "0"));
                 String ts = new SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(new Date());
+                
+                // Anlık verileri kalıcı hafızaya kaydediyoruz (Uygulama kapansa bile silinmez)
+                prefs.edit()
+                    .putFloat("last_sell", (float) r.sell)
+                    .putFloat("last_buy", (float) r.buy)
+                    .putString("last_ts", ts)
+                    .apply();
+
                 updateForeground(String.format(Locale.US, "Satış %.4f TL · Alış %.4f TL · %s", r.sell, r.buy, ts));
                 
                 Intent updateIntent = new Intent("com.eren.gumustakip.UPDATE_UI");
@@ -118,12 +126,10 @@ public class PriceTrackingService extends Service {
         if (Build.VERSION.SDK_INT >= 26) {
             NotificationManager nm = getSystemService(NotificationManager.class);
             
-            // 1. Durum Kanalı: Sessiz (IMPORTANCE_LOW) - 60 saniyede bir güncellenirken baloncuk çıkarmaz
             NotificationChannel statusChannel = new NotificationChannel(CHANNEL_STATUS_ID, "Gümüş Takip Durumu", NotificationManager.IMPORTANCE_LOW);
             statusChannel.setDescription("Arka plan servis durumunu gösterir");
             nm.createNotificationChannel(statusChannel);
 
-            // 2. Alarm Kanalı: Sesli/Baloncuklu (IMPORTANCE_HIGH) - Sadece seviye değişince uyarı verir
             NotificationChannel alertChannel = new NotificationChannel(CHANNEL_ALERT_ID, "Gümüş Seviye Alarmları", NotificationManager.IMPORTANCE_HIGH);
             alertChannel.setDescription("Fiyat seviye değişim bildirimleri");
             nm.createNotificationChannel(alertChannel);
