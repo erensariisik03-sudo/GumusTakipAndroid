@@ -2,7 +2,10 @@ package com.eren.gumustakip;
 
 import android.Manifest;
 import android.app.Activity;
+import android.content.BroadcastReceiver;
+import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.os.Build;
@@ -27,6 +30,21 @@ public class MainActivity extends Activity {
     private TextView priceView, portfolioView, updateView, statusView;
     private Button startButton, stopButton;
 
+    // Servisten gelen verileri dinleyen receiver
+    private final BroadcastReceiver updateReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            if ("com.eren.gumustakip.UPDATE_UI".equals(intent.getAction())) {
+                double sell = intent.getDoubleExtra("sell", 0);
+                double buy = intent.getDoubleExtra("buy", 0);
+                double grams = intent.getDoubleExtra("grams", 0);
+                double cost = intent.getDoubleExtra("cost", 0);
+                String ts = intent.getStringExtra("ts");
+                showLive(buy, sell, grams, cost, ts);
+            }
+        }
+    };
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -34,6 +52,23 @@ public class MainActivity extends Activity {
         buildUi();
         loadSavedInputs();
         requestNotificationPermission();
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        IntentFilter filter = new IntentFilter("com.eren.gumustakip.UPDATE_UI");
+        if (Build.VERSION.SDK_INT >= 33) {
+            registerReceiver(updateReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
+        } else {
+            registerReceiver(updateReceiver, filter);
+        }
+    }
+
+    @Override
+    protected void onPause() {
+        super.onPause();
+        try { unregisterReceiver(updateReceiver); } catch (Exception ignored) {}
     }
 
     private void buildUi() {
