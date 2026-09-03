@@ -1,110 +1,83 @@
 package com.eren.gumustakip;
 
-import java.io.BufferedReader;
-import java.io.InputStream;
-import java.io.InputStreamReader;
-import java.net.HttpURLConnection;
-import java.net.URL;
-import java.nio.charset.StandardCharsets;
+import android.util.Log;
+import org.jsoup.Jsoup;
+import org.jsoup.nodes.Document;
+import org.jsoup.nodes.Element;
+import org.jsoup.select.Elements;
+
 import java.util.ArrayList;
 import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-public final class PriceTracker {
-    private static final String URL_STR = "https://www.getirfinans.com/doviz-islemleri/";
-    private static final Pattern PRICE = Pattern.compile("\\d{2,3}[\\.,]\\d{2,4}");
-    private static final Pattern SPAN = Pattern.compile("<span[^>]*class=[\\\"']([^\\\"']*(?:text-b2|font-semibold)[^\\\"']*)[\\\"'][^>]*>(.*?)</span>", Pattern.CASE_INSENSITIVE | Pattern.DOTALL);
+public class PriceTracker {
+    private static final String URL = "https://www.getirfinans.com/doviz-islemleri/";
+    private static final String TAG = "PriceTracker";
+    private static final String USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
 
-    private PriceTracker() {}
+    // Alış ve Satış fiyatını tutmak için model
+    public static class GumusFiyat {
+        public double alis;
+        public double satis;
 
-    public static Result fetch() throws Exception {
-        HttpURLConnection c = (HttpURLConnection) new URL(URL_STR).openConnection();
-        c.setRequestMethod("GET");
-        c.setConnectTimeout(15000); c.setReadTimeout(15000);
-        c.setRequestProperty("User-Agent", "Mozilla/5.0 (Android) AppleWebKit/537.36 Chrome/124 Safari/537.36");
-        c.setRequestProperty("Accept-Language", "tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7");
-        if (c.getResponseCode() != 200) throw new Exception("HTTP " + c.getResponseCode());
-        String html = read(c.getInputStream());
-        Result r = method1(html);
-        if (r != null) return r;
-        r = method2(html);
-        if (r != null) return r;
-        throw new Exception("Gümüş/XAG fiyatı bulunamadı");
-    }
-
-    private static Result method1(String html) {
-        Matcher sm = SPAN.matcher(html);
-        while (sm.find()) {
-            int start = Math.max(0, sm.start() - 1200);
-            int end = Math.min(html.length(), sm.end() + 1200);
-            String block = stripTags(html.substring(start, end)).toLowerCase();
-            if (block.contains("xag") || block.contains("gümüş")) {
-                List<Double> prices = pricesIn(sm.group(2) + " " + stripTags(html.substring(start, end)));
-                if (prices.size() >= 2) return new Result(prices.get(0), prices.get(1));
-            }
+        public GumusFiyat(double alis, double satis) {
+            this.alis = alis;
+            this.satis = satis;
         }
-        return null;
     }
 
-    private static Result method2(String html) {
-        String[] parts = stripTags(html).split("\\s+");
-        for (int i = 0; i < parts.length; i++) {
-            String t = parts[i].trim();
-            if (t.equalsIgnoreCase("gümüş") || t.equalsIgnoreCase("xag")) {
-                List<Double> prices = new ArrayList<>();
-                for (int j = 1; j <= 14 && i + j < parts.length; j++) {
-                    Double v = parsePrice(parts[i + j]);
-                    if (v != null) { prices.add(v); if (prices.size() == 2) break; }
-                }
-                if (prices.size() >= 2) return new Result(prices.get(0), prices.get(1));
-                if (prices.size() == 1) return new Result(prices.get(0), Double.NaN);
-            }
-        }
-        return null;
-    }
-
-    private static List<Double> pricesIn(String s) {
-        List<Double> out = new ArrayList<>();
-        Matcher m = PRICE.matcher(s);
-        while (m.find()) {
-            Double v = parsePrice(m.group());
-            if (v != null) out.add(v);
-        }
-        return out;
-    }
-
-    private static Double parsePrice(String s) {
-        Matcher m = PRICE.matcher(s);
-        if (!m.find()) return null;
+    public static GumusFiyat fiyatiCek() {
         try {
-            double v = Double.parseDouble(m.group().replace(',', '.'));
-            return (v > 50 && v < 300) ? v : null;
-        } catch (Exception e) { return null; }
-    }
+            // Siteye bağlanma ve başlıkları (Headers) ayarlama
+            Document doc = Jsoup.connect(URL)
+                    .userAgent(USER_AGENT)
+                    .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8")
+                    .header("Accept-Language", "tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7")
+                    .timeout(15000)
+                    .get();
 
-    private static String stripTags(String s) {
-        return s.replaceAll("<script[\\s\\S]*?</script>", " ")
-                .replaceAll("<style[\\s\\S]*?</style>", " ")
-                .replaceAll("<[^>]+>", " ")
-                .replace("&nbsp;", " ")
-                .replace("&amp;", "&")
-                .replace("&quot;", "\\\"")
-                .replace("&#39;", "'")
-                .replaceAll("\\s+", " ")
-                .trim();
-    }
+            // Sitedeki tr, div ve li etiketlerini tarama
+            Elements rows = doc.select("div, tr, li");
+            for (Element row : rows) {
+                String rowText = row.text().toLowerCase();
+                
+                // Eğer satırda XAG veya Gümüş geçiyorsa
+                if (rowText.contains("xag") || rowText.contains("gümüş")) {
+                    Elements spans = row.select("span.text-b2, span.font-semibold");
+                    List<Double> fiyatlar = new ArrayList<>();
+                    
+                    // Regex ile sayıyı yakalama (Örn: 28,45 veya 28.45)
+                    Pattern pattern = Pattern.compile("\\d{2,3}[.,]\\d{2,4}");
 
-    private static String read(InputStream in) throws Exception {
-        StringBuilder b = new StringBuilder();
-        try (BufferedReader r = new BufferedReader(new InputStreamReader(in, StandardCharsets.UTF_8))) {
-            String line; while ((line = r.readLine()) != null) b.append(line).append('\n');
+                    for (Element span : spans) {
+                        Matcher matcher = pattern.matcher(span.text());
+                        if (matcher.find()) {
+                            String temizSayi = matcher.group(0).replace(",", ".");
+                            try {
+                                double fiyatFloat = Double.parseDouble(temizSayi);
+                                // Sadece 50 ile 300 TL arasındaki mantıklı gümüş fiyatlarını al
+                                if (fiyatFloat > 50.0 && fiyatFloat < 300.0) {
+                                    fiyatlar.add(fiyatFloat);
+                                }
+                            } catch (NumberFormatException e) {
+                                Log.e(TAG, "Sayıya çevirme hatası: " + temizSayi);
+                            }
+                        }
+                    }
+
+                    // Fiyatlar bulunduysa nesneyi döndür (0 = Alış, 1 = Satış)
+                    if (fiyatlar.size() >= 2) {
+                        return new GumusFiyat(fiyatlar.get(0), fiyatlar.get(1));
+                    } else if (fiyatlar.size() == 1) {
+                        return new GumusFiyat(fiyatlar.get(0), 0.0);
+                    }
+                }
+            }
+            Log.e(TAG, "Hata: Sayfada Gümüş Fiyatı Bulunamadı.");
+        } catch (Exception e) {
+            Log.e(TAG, "Bağlantı Hatası: " + e.getMessage());
         }
-        return b.toString();
-    }
-
-    public static final class Result {
-        public final double buy, sell;
-        public Result(double buy, double sell) { this.buy = buy; this.sell = sell; }
+        return null;
     }
 }
