@@ -19,7 +19,10 @@ import java.util.concurrent.Executors;
 public class PriceTrackingService extends Service {
     public static final String ACTION_START = "START";
     public static final String ACTION_STOP = "STOP";
-    private static final String CHANNEL_ID = "gumus_takip_channel";
+    
+    private static final String CHANNEL_STATUS_ID = "gumus_status_channel";
+    private static final String CHANNEL_ALERT_ID = "gumus_alert_channel";
+    
     private static final int NOTIFICATION_ID = 2201;
     private static final int LEVEL_NOTIFICATION_ID = 2202;
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
@@ -30,14 +33,14 @@ public class PriceTrackingService extends Service {
     @Override public void onCreate() {
         super.onCreate();
         prefs = getSharedPreferences("gumus", MODE_PRIVATE);
-        createChannel();
+        createChannels();
     }
 
     @Override public int onStartCommand(Intent intent, int flags, int startId) {
         if (intent != null && ACTION_STOP.equals(intent.getAction())) {
             stopTracking(); return START_NOT_STICKY;
         }
-        startForeground(NOTIFICATION_ID, buildNotification("Gümüş takibi çalışıyor", "60 saniyede bir fiyat kontrol ediliyor."));
+        startForeground(NOTIFICATION_ID, buildNotification(CHANNEL_STATUS_ID, "Gümüş takibi çalışıyor", "60 saniyede bir fiyat kontrol ediliyor."));
         if (!running) { running = true; executor.execute(this::loop); }
         return START_STICKY;
     }
@@ -51,7 +54,6 @@ public class PriceTrackingService extends Service {
                 String ts = new SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(new Date());
                 updateForeground(String.format(Locale.US, "Satış %.4f TL · Alış %.4f TL · %s", r.sell, r.buy, ts));
                 
-                // UI (Arayüz) güncellemesi için Broadcast gönderiyoruz
                 Intent updateIntent = new Intent("com.eren.gumustakip.UPDATE_UI");
                 updateIntent.putExtra("sell", r.sell);
                 updateIntent.putExtra("buy", r.buy);
@@ -84,7 +86,7 @@ public class PriceTrackingService extends Service {
                 msg += String.format(Locale.US, "\nPortföy Değeri: %.2f TL\nNet Kar/Zarar: %+.2f TL (%+.2f%%)", value, profit, pct).replace("+ ", "+");
             }
             NotificationManager nm = getSystemService(NotificationManager.class);
-            nm.notify(LEVEL_NOTIFICATION_ID, buildNotification("Gümüş Satış " + level + " TL Seviyesine Geçti! (" + direction + ")", msg));
+            nm.notify(LEVEL_NOTIFICATION_ID, buildNotification(CHANNEL_ALERT_ID, "Gümüş Satış " + level + " TL Seviyesine Geçti! (" + direction + ")", msg));
         }
         lastSell = sell;
     }
@@ -93,23 +95,38 @@ public class PriceTrackingService extends Service {
 
     private double parse(String s) { try { return Double.parseDouble(s.replace(",", ".")); } catch (Exception e) { return 0; } }
 
-    private Notification buildNotification(String title, String text) {
+    private Notification buildNotification(String channelId, String title, String text) {
         Intent i = new Intent(this, MainActivity.class);
         PendingIntent pi = PendingIntent.getActivity(this, 0, i, PendingIntent.FLAG_UPDATE_CURRENT | (Build.VERSION.SDK_INT >= 23 ? PendingIntent.FLAG_IMMUTABLE : 0));
-        Notification.Builder b = Build.VERSION.SDK_INT >= 26 ? new Notification.Builder(this, CHANNEL_ID) : new Notification.Builder(this);
-        return b.setSmallIcon(android.R.drawable.ic_menu_info_details).setContentTitle(title).setContentText(text).setStyle(new Notification.BigTextStyle().bigText(text)).setContentIntent(pi).setOngoing(title.contains("çalışıyor")).build();
+        Notification.Builder b = Build.VERSION.SDK_INT >= 26 ? new Notification.Builder(this, channelId) : new Notification.Builder(this);
+        return b.setSmallIcon(android.R.drawable.ic_menu_info_details)
+                .setContentTitle(title)
+                .setContentText(text)
+                .setStyle(new Notification.BigTextStyle().bigText(text))
+                .setContentIntent(pi)
+                .setOngoing(channelId.equals(CHANNEL_STATUS_ID))
+                .setOnlyAlertOnce(true)
+                .build();
     }
 
     private void updateForeground(String text) {
         NotificationManager nm = getSystemService(NotificationManager.class);
-        nm.notify(NOTIFICATION_ID, buildNotification("Gümüş Takip", text));
+        nm.notify(NOTIFICATION_ID, buildNotification(CHANNEL_STATUS_ID, "Gümüş Takip", text));
     }
 
-    private void createChannel() {
+    private void createChannels() {
         if (Build.VERSION.SDK_INT >= 26) {
-            NotificationChannel ch = new NotificationChannel(CHANNEL_ID, "Gümüş Takip", NotificationManager.IMPORTANCE_HIGH);
-            ch.setDescription("Gümüş fiyat takip bildirimleri");
-            getSystemService(NotificationManager.class).createNotificationChannel(ch);
+            NotificationManager nm = getSystemService(NotificationManager.class);
+            
+            // 1. Durum Kanalı: Sessiz (IMPORTANCE_LOW) - 60 saniyede bir güncellenirken baloncuk çıkarmaz
+            NotificationChannel statusChannel = new NotificationChannel(CHANNEL_STATUS_ID, "Gümüş Takip Durumu", NotificationManager.IMPORTANCE_LOW);
+            statusChannel.setDescription("Arka plan servis durumunu gösterir");
+            nm.createNotificationChannel(statusChannel);
+
+            // 2. Alarm Kanalı: Sesli/Baloncuklu (IMPORTANCE_HIGH) - Sadece seviye değişince uyarı verir
+            NotificationChannel alertChannel = new NotificationChannel(CHANNEL_ALERT_ID, "Gümüş Seviye Alarmları", NotificationManager.IMPORTANCE_HIGH);
+            alertChannel.setDescription("Fiyat seviye değişim bildirimleri");
+            nm.createNotificationChannel(alertChannel);
         }
     }
 
