@@ -123,20 +123,33 @@ public class MainActivity extends Activity {
         setContentView(scroll);
     }
 
-    private void startTracking() {
-        double grams = parse(gramInput.getText().toString());
-        double cost = parse(costInput.getText().toString());
-        if (grams < 0 || cost < 0) {
-            Toast.makeText(this, "Değerleri kontrol et.", Toast.LENGTH_SHORT).show();
+private void startTracking() {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+        String packageName = getPackageName();
+        android.os.PowerManager pm = (android.os.PowerManager) getSystemService(POWER_SERVICE);
+        if (!pm.isIgnoringBatteryOptimizations(packageName)) {
+            Intent batteryIntent = new Intent();
+            batteryIntent.setAction(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS);
+            batteryIntent.setData(android.net.Uri.parse("package:" + packageName));
+            startActivity(batteryIntent);
+            Toast.makeText(this, "Lütfen pil optimizasyonunu kapatın.", Toast.LENGTH_LONG).show();
             return;
         }
-        prefs.edit().putString("grams", String.valueOf(grams)).putString("cost", String.valueOf(cost)).apply();
-        Intent i = new Intent(this, PriceTrackingService.class);
-        i.setAction(PriceTrackingService.ACTION_START);
-        if (Build.VERSION.SDK_INT >= 26) startForegroundService(i); else startService(i);
-        statusView.setText("Takip durumu: aktif");
-        Toast.makeText(this, "Gümüş takibi başlatıldı.", Toast.LENGTH_SHORT).show();
     }
+
+    double grams = parse(gramInput.getText().toString());
+    double cost = parse(costInput.getText().toString());
+    if (grams < 0 || cost < 0) {
+        Toast.makeText(this, "Değerleri kontrol et.", Toast.LENGTH_SHORT).show();
+        return;
+    }
+    prefs.edit().putString("grams", String.valueOf(grams)).putString("cost", String.valueOf(cost)).apply();
+    Intent i = new Intent(this, PriceTrackingService.class);
+    i.setAction(PriceTrackingService.ACTION_START);
+    if (Build.VERSION.SDK_INT >= 26) startForegroundService(i); else startService(i);
+    statusView.setText("Takip durumu: aktif");
+    Toast.makeText(this, "Gümüş takibi başlatıldı.", Toast.LENGTH_SHORT).show();
+}
 
     private void stopTracking() {
         Intent i = new Intent(this, PriceTrackingService.class);
