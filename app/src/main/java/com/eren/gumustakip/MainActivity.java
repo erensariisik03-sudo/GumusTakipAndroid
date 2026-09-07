@@ -31,8 +31,6 @@ import java.util.Locale;
 public class MainActivity extends Activity {
 private static final int NOTIFICATION_REQUEST = 1001;
 private static final int PAD = 16;
-
-```
 private SharedPreferences prefs;
 private EditText gramInput, costInput, controlIntervalInput, aiIntervalInput;
 private TextView priceView, buyView, sellView, portfolioView, updateView,
@@ -1382,7 +1380,4 @@ public void showLive(
             );
         }
     });
-}
-```
-
 }
