@@ -97,7 +97,7 @@ public class PriceTrackingService extends Service {
                 notifyLevelChange(r.sell, grams, cost);
 
                 long aiInterval = getPositiveLong("ai_interval_min", 60) * 60_000L;
-                if (System.currentTimeMillis() - lastAiTimeMs >= aiInterval) {
+                if (GeminiAnalyzer.hasApiKey(this) && System.currentTimeMillis() - lastAiTimeMs >= aiInterval) {
                     runAiAnalysis(grams, cost);
                     lastAiTimeMs = System.currentTimeMillis();
                 }
@@ -185,7 +185,7 @@ public class PriceTrackingService extends Service {
     private void runAiAnalysis(double grams, double cost) {
         String aiContext = buildAiContext();
         long aiMin = getPositiveLong("ai_interval_min", 60);
-        System.out.println("🧠 " + aiMin + " dakika doldu. Bugünün kaydedilmiş verileri Gemini'ye gönderiliyor...");
+        System.out.println("AI analiz zamanı geldi; günün kayıtları işleniyor...");
 
         String answer = GeminiAnalyzer.ask(this, grams, cost, aiContext, aiMin);
 
@@ -208,8 +208,7 @@ public class PriceTrackingService extends Service {
     }
 
     /**
-     * AI artık RAM'deki geçici liste yerine kaydedilmiş veriyi kullanır.
-     * Servis yeniden başlasa da son 30 anlık kayıt ve günün TXT geçmişi gönderilebilir.
+     * Son 30 kayıt ve günün geçmişi analiz için kullanılır.
      */
     private String buildAiContext() {
         DailyStorage.ensureToday(this);
@@ -307,7 +306,7 @@ public class PriceTrackingService extends Service {
         builder.setContentTitle(title)
                 .setContentText(text)
                 .setStyle(new Notification.BigTextStyle().bigText(text))
-                .setSmallIcon(android.R.drawable.ic_dialog_info)
+                .setSmallIcon(R.drawable.ic_notification)
                 .setContentIntent(pi)
                 .setAutoCancel(!channelId.equals(CHANNEL_STATUS_ID))
                 .setOnlyAlertOnce(channelId.equals(CHANNEL_STATUS_ID));
