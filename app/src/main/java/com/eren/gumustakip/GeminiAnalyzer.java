@@ -17,15 +17,15 @@ import java.nio.charset.StandardCharsets;
 public final class GeminiAnalyzer {
     // Kullanıcının verdiği scriptteki API anahtarı doğrudan burada tutuluyor.
     // Gerçek bir anahtar kullanıyorsanız kaynak kodu herkese açık GitHub deposuna göndermeyin.
-    private static final String API_KEY = "AIzaSyDHsVhYC3CraENK4juA1LrgAPS83PqyN_0";
+    private static final String API_KEY = "AQ.Ab8RN6K5mferVKngM-xOg3OK5ZONjyvxQnv8HlJwmgJpKwNfTQ";
     private static final String[] MODELS = {"gemini-2.5-flash", "gemini-1.5-flash"};
 
     private GeminiAnalyzer() {}
 
-    public static String ask(double gramMiktari, double maliyetFiyati, String fiyatTablosu) {
+    public static String ask(double gramMiktari, double maliyetFiyati, String fiyatTablosu, long analizDakika) {
         String prompt =
                 "Sen bir finansal asistansın. Elimde " + maliyetFiyati + " TL maliyetle aldığım "
-                        + gramMiktari + " gram gümüş var. Piyasada son 30 dakikadaki fiyat değişimleri şu şekilde "
+                        + gramMiktari + " gram gümüş var. Piyasada son " + analizDakika + " dakikadaki fiyat değişimleri şu şekilde "
                         + "(Saat - Fiyat): " + fiyatTablosu + ". "
                         + "Bu verilere göre sence ne yapmalıyım? Satmalı mıyım, tutmalı mıyım, yoksa almaya devam mı etmeliyim? "
                         + "Lütfen çok kısa, net ve bir telefon bildirimine sığacak kadar öz (maksimum 2 cümle) bir tavsiye ver.";
