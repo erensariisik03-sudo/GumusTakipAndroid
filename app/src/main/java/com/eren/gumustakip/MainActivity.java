@@ -48,11 +48,13 @@ public class MainActivity extends Activity {
     @Override protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         prefs = getSharedPreferences("gumus", MODE_PRIVATE);
+        DailyStorage.ensureToday(this);
         buildUi(); loadSavedInputs(); requestNotificationPermission(); loadSavedLiveData(); loadLiveTable(); updateScheduleLabel();
     }
 
     @Override protected void onResume() {
         super.onResume();
+        DailyStorage.ensureToday(this);
         IntentFilter f = new IntentFilter(); f.addAction("com.eren.gumustakip.UPDATE_UI"); f.addAction("com.eren.gumustakip.UPDATE_AI");
         if (Build.VERSION.SDK_INT >= 33) registerReceiver(updateReceiver, f, Context.RECEIVER_NOT_EXPORTED); else registerReceiver(updateReceiver, f);
         loadSavedLiveData(); loadLiveTable(); updateScheduleLabel();

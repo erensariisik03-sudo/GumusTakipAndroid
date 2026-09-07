@@ -11,10 +11,16 @@ import java.util.Locale;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+/**
+ * GetirFinans XAG fiyat çekicisi.
+ * Python scraper ile aynı temel yaklaşımı kullanır:
+ * XAG/Gümüş içeren satır -> belirli span'lerdeki ilk iki fiyat -> büyük ALIŞ, küçük SATIŞ.
+ */
 public final class PriceTracker {
     private static final String URL_STR = "https://www.getirfinans.com/doviz-islemleri/";
     private static final String USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
-    private static final Pattern PRICE_PATTERN = Pattern.compile("\\d{2,3}[.,]\\d{2,4}");
+    private static final Pattern PRICE_PATTERN = Pattern.compile("\\d{2,3}[\\.,]\\d{2,4}");
+    private static final Pattern PRICE_RANGE_PATTERN = Pattern.compile("(?i)^([5-9]\\d(?:[\\.,]\\d{2,4})?|1\\d{2}(?:[\\.,]\\d{2,4})?|2\\d{2}(?:[\\.,]\\d{2,4})?)$");
 
     private PriceTracker() {}
 
@@ -28,123 +34,90 @@ public final class PriceTracker {
                 .timeout(15000)
                 .get();
 
-        // Öncelik: Alış/Satış etiketlerinin yanındaki fiyatları bul.
-        Elements rows = doc.select("div, tr, li");
-        for (Element row : rows) {
-            String text = row.text();
-            String lower = text.toLowerCase(Locale.ROOT);
-            if (!(text.contains("XAG") || lower.contains("gümüş"))) continue;
+        // Python kodundaki ilk yöntemle aynı: XAG/Gümüş satırındaki hedef span'leri tara.
+        for (Element row : doc.select("div, tr, li")) {
+            String rowText = row.text();
+            String lower = rowText.toLowerCase(Locale.ROOT);
+            if (!(rowText.contains("XAG") || lower.contains("gümüş"))) continue;
 
-            Double labelledBuy = findLabelledPrice(row, "alış");
-            Double labelledSell = findLabelledPrice(row, "satış");
-            if (labelledBuy != null && labelledSell != null) {
-                return normalize(labelledBuy, labelledSell);
-            }
-        }
-
-        // Yedek: önce aday fiyatları çıkar, sonra en yüksek olanı ALIŞ, en düşük olanı SATIŞ kabul et.
-        // Böylece web sayfasındaki görsel/sıralama değişse bile ters yazma engellenir.
-        for (Element row : rows) {
-            String text = row.text();
-            String lower = text.toLowerCase(Locale.ROOT);
-            if (!(text.contains("XAG") || lower.contains("gümüş"))) continue;
-
-            List<Double> prices = extractPrices(row.select("span[class*=text-b2], span[class*=font-semibold]"));
-            Result result = fromCandidates(prices);
+            Elements spans = row.select("span[class*=text-b2], span[class*=font-semibold]");
+            List<Double> prices = extractValidPrices(spans, 2);
+            Result result = normalizeFirstTwo(prices);
             if (result != null) return result;
         }
 
-        String fullText = doc.body() != null ? doc.body().text() : doc.text();
-        String[] tokens = fullText.split("\\s+");
-        for (int i = 0; i < tokens.length; i++) {
-            String token = tokens[i].toLowerCase(Locale.ROOT);
-            if (!token.equals("gümüş") && !token.equals("xag")) continue;
+        // Yedek: Python kodundaki genel metin taramasına benzer şekilde Gümüş/XAG'den sonra gelen ilk iki sayı.
+        String bodyText = doc.body() != null ? doc.body().text() : doc.text();
+        List<String> textList = new ArrayList<>();
+        for (String token : bodyText.split("\\s+")) {
+            if (token != null && !token.trim().isEmpty()) textList.add(token.trim());
+        }
+        for (int i = 0; i < textList.size(); i++) {
+            String token = textList.get(i) == null ? "" : textList.get(i).trim();
+            String upper = token.toUpperCase(Locale.ROOT);
+            if (!(upper.equals("GÜMÜŞ") || upper.equals("XAG"))) continue;
+
             List<Double> prices = new ArrayList<>();
-            for (int j = 1; j <= 16 && i + j < tokens.length; j++) {
-                Matcher matcher = PRICE_PATTERN.matcher(tokens[i + j]);
+            for (int j = 1; j <= 14 && i + j < textList.size(); j++) {
+                Matcher matcher = PRICE_PATTERN.matcher(textList.get(i + j) == null ? "" : textList.get(i + j));
                 if (matcher.find()) {
-                    Double d = parsePrice(matcher.group(0));
-                    if (d != null) prices.add(d);
-                    if (prices.size() >= 4) break;
+                    Double value = parsePrice(matcher.group());
+                    if (value != null) {
+                        prices.add(value);
+                        if (prices.size() == 2) break;
+                    }
                 }
             }
-            Result result = fromCandidates(prices);
+            Result result = normalizeFirstTwo(prices);
             if (result != null) return result;
         }
 
-        throw new Exception("Sayfada Gümüş/XAG fiyatı bulunamadı.");
+        throw new Exception("Sayfada Gümüş/XAG için iki geçerli fiyat bulunamadı.");
     }
 
-    private static Double findLabelledPrice(Element row, String label) {
-        String text = row.text();
-        java.util.regex.Pattern p = java.util.regex.Pattern.compile(
-                "(?i)" + label + "\\s*[:\\-]?\\s*(\\d{2,3}(?:[.,]\\d{2,4}))");
-        java.util.regex.Matcher m = p.matcher(text);
-        if (m.find()) return parsePrice(m.group(1));
-
-        // Bazı tasarımlarda etiket ve sayı ayrı HTML düğümlerindedir.
-        Elements spans = row.select("span[class*=text-b2], span[class*=font-semibold], span");
-        for (int i = 0; i < spans.size(); i++) {
-            String current = spans.get(i).text().trim().toLowerCase(Locale.ROOT);
-            if (!current.equals(label)) continue;
-            for (int j = i + 1; j < Math.min(spans.size(), i + 4); j++) {
-                Double d = firstValidPrice(spans.get(j).text());
-                if (d != null) return d;
+    private static List<Double> extractValidPrices(Elements elements, int maxCount) {
+        List<Double> prices = new ArrayList<>();
+        for (Element element : elements) {
+            Matcher matcher = PRICE_PATTERN.matcher(element.text());
+            while (matcher.find()) {
+                Double value = parsePrice(matcher.group());
+                if (value != null) {
+                    prices.add(value);
+                    if (prices.size() >= maxCount) return prices;
+                }
             }
         }
-        return null;
+        return prices;
     }
 
-    private static Result normalize(double a, double s) {
-        // Kullanıcının istediği kural: Alış her zaman daha yüksek, Satış daha düşük.
-        if (a >= s) return new Result(a, s);
-        return new Result(s, a);
-    }
-
-    private static Result fromCandidates(List<Double> prices) {
-        if (prices.size() < 2) return null;
-        double min = Double.POSITIVE_INFINITY;
-        double max = Double.NEGATIVE_INFINITY;
-        for (double p : prices) {
-            min = Math.min(min, p);
-            max = Math.max(max, p);
-        }
-        if (max == min) return null;
-        return normalize(max, min);
-    }
-
-    private static List<Double> extractPrices(Elements elements) {
-        List<Double> out = new ArrayList<>();
-        for (Element e : elements) {
-            Matcher m = PRICE_PATTERN.matcher(e.text());
-            if (m.find()) {
-                Double d = parsePrice(m.group(0));
-                if (d != null) out.add(d);
-            }
-        }
-        return out;
-    }
-
-    private static Double firstValidPrice(String s) {
-        Matcher m = PRICE_PATTERN.matcher(s);
-        if (!m.find()) return null;
-        return parsePrice(m.group(0));
+    /** Büyük sayı ALIŞ, küçük sayı SATIŞ. Sıralama kaynağın sırasından bağımsızdır. */
+    private static Result normalizeFirstTwo(List<Double> prices) {
+        if (prices == null || prices.size() < 2) return null;
+        double first = prices.get(0);
+        double second = prices.get(1);
+        if (first == second) return null;
+        return first >= second ? new Result(first, second) : new Result(second, first);
     }
 
     private static Double parsePrice(String raw) {
         try {
-            double d;
-            if (raw.contains(",")) d = Double.parseDouble(raw.replace(".", "").replace(",", "."));
-            else d = Double.parseDouble(raw);
-            // Gümüş TL/gram için mevcut scraper'ın güvenlik aralığını koru.
-            if (d > 50.0 && d < 300.0) return d;
-        } catch (Exception ignored) {}
+            String normalized = raw.trim();
+            // Türkçe biçim: 123,4567 -> 123.4567. Binlik ayraçlı format da güvenli şekilde ele alınır.
+            if (normalized.contains(",")) {
+                normalized = normalized.replace(".", "").replace(',', '.');
+            }
+            double value = Double.parseDouble(normalized);
+            if (value > 50.0 && value < 300.0 && PRICE_RANGE_PATTERN.matcher(raw.trim()).find()) {
+                return value;
+            }
+        } catch (Exception ignored) {
+        }
         return null;
     }
 
     public static final class Result {
-        public final double buy;  // Alış: yüksek olan
-        public final double sell; // Satış: düşük olan
+        public final double buy;  // Her zaman yüksek olan fiyat.
+        public final double sell; // Her zaman düşük olan fiyat.
 
         public Result(double buy, double sell) {
             this.buy = buy;
