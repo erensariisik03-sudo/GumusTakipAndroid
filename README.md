@@ -27,3 +27,11 @@ GetirFinans üzerinden anlık XAG (gümüş) fiyatlarını takip eden, belirli T
 
 ## Gemini API Notu
 Kod içinde kullanıcı tarafından verilen test API anahtarı doğrudan `GeminiAnalyzer.java` içinde tanımlıdır. GitHub deposunu public yapıyorsanız gerçek API anahtarınızı kaynak koda koymamanız gerekir.
+
+
+## Yeni ayarlar
+- Site kontrol aralığı: varsayılan **1 dakika**, uygulama içinden değiştirilebilir.
+- Gemini analiz aralığı: varsayılan **60 dakika**, uygulama içinden değiştirilebilir.
+- Her başarılı fiyat okuması anlık tabloya (son 30 kayıt), günlük TXT dosyasına ve son değer hafızasına kaydedilir.
+- Günlük TXT dosyası uygulamanın güvenli dosya alanında `gumus_fiyat_gecmisi.txt` olarak tutulur; uygulama içindeki **TXT DOSYASINI PAYLAŞ** düğmesiyle dışarı aktarılabilir.
+- Fiyat parser'ı Alış/Satış etiketlerini öncelikli kullanır ve etiket bulunamazsa kullanıcı tarafından belirtilen kurala göre yüksek fiyatı Alış, düşük fiyatı Satış olarak normalize eder.
