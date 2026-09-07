@@ -27,7 +27,7 @@ public class MainActivity extends Activity {
     private static final int NOTIFICATION_REQUEST = 1001;
     private SharedPreferences prefs;
     private EditText gramInput, costInput;
-    private TextView priceView, portfolioView, updateView, statusView;
+    private TextView priceView, portfolioView, updateView, statusView, aiView;
     private Button startButton, stopButton;
 
     // Servisten gelen verileri dinleyen receiver
@@ -41,6 +41,9 @@ public class MainActivity extends Activity {
                 double cost = intent.getDoubleExtra("cost", 0);
                 String ts = intent.getStringExtra("ts");
                 showLive(buy, sell, grams, cost, ts);
+            } else if ("com.eren.gumustakip.UPDATE_AI".equals(intent.getAction())) {
+                String advice = intent.getStringExtra("advice");
+                if (advice != null && aiView != null) aiView.setText("Son Gemini tavsiyesi:\n" + advice);
             }
         }
     };
@@ -60,7 +63,9 @@ public class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
-        IntentFilter filter = new IntentFilter("com.eren.gumustakip.UPDATE_UI");
+        IntentFilter filter = new IntentFilter();
+        filter.addAction("com.eren.gumustakip.UPDATE_UI");
+        filter.addAction("com.eren.gumustakip.UPDATE_AI");
         if (Build.VERSION.SDK_INT >= 33) {
             registerReceiver(updateReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
         } else {
@@ -84,7 +89,7 @@ public class MainActivity extends Activity {
 
         TextView title = text("GÜMÜŞ TAKİP", 26, Color.WHITE, true);
         root.addView(title, matchWrap(0));
-        TextView subtitle = text("GetirFinans · XAG · 60 saniyelik takip", 14, Color.LTGRAY, false);
+        TextView subtitle = text("GetirFinans · XAG · 40 saniyelik takip", 14, Color.LTGRAY, false);
         root.addView(subtitle, matchWrap(0));
 
         LinearLayout card = card();
@@ -109,15 +114,17 @@ public class MainActivity extends Activity {
         addLabel(live, "ANLIK VERİ");
         priceView = text("Satış: —\nAlış: —", 21, Color.WHITE, true);
         live.addView(priceView, matchWrap(0));
-        portfolioView = text("Portföy: —\nKar/Zarار: —", 16, Color.LTGRAY, false);
+        portfolioView = text("Portföy: —\nKar/Zarar: —", 16, Color.LTGRAY, false);
         live.addView(portfolioView, matchWrap(0));
         updateView = text("Son kontrol: —", 13, Color.GRAY, false);
         live.addView(updateView, matchWrap(0));
         statusView = text("Takip durumu: kapalı", 14, Color.LTGRAY, false);
         live.addView(statusView, matchWrap(0));
+        aiView = text("Son Gemini tavsiyesi: Henüz analiz yapılmadı.", 14, Color.LTGRAY, false);
+        live.addView(aiView, matchWrap(0));
         root.addView(live, matchWrap(0));
 
-        TextView info = text("Bildirim kuralı: Satış fiyatının tam TL seviyesi değiştiğinde bildirim gönderilir. Kontrol aralığı 60 saniyedir.", 13, Color.GRAY, false);
+        TextView info = text("40 saniyede bir fiyat alınır ve günlük TXT geçmişine yazılır. Tam 30 dakikada bir son veriler Gemini'ye gönderilir. Satış fiyatının tam TL seviyesi değiştiğinde de bildirim gönderilir.", 13, Color.GRAY, false);
         root.addView(info, matchWrap(0));
 
         startButton.setOnClickListener(v -> startTracking());
@@ -168,8 +175,8 @@ public class MainActivity extends Activity {
     }
 
     private void loadSavedLiveData() {
-        float sell = prefs.getFloat("last_sell", 0);
-        float buy = prefs.getFloat("last_buy", 0);
+        double sell = prefs.getFloat("last_sell", 0);
+        double buy = prefs.getFloat("last_buy", 0);
         String ts = prefs.getString("last_ts", "—");
         
         if (sell > 0) {
@@ -177,6 +184,8 @@ public class MainActivity extends Activity {
             double cost = parse(costInput.getText().toString());
             showLive(buy, sell, grams, cost, ts);
         }
+        String advice = prefs.getString("last_ai_advice", "");
+        if (!advice.isEmpty() && aiView != null) aiView.setText("Son Gemini tavsiyesi:\n" + advice);
     }
 
     private void requestNotificationPermission() {
