@@ -1,5 +1,13 @@
 # Gümüş Takip
 
-Android uygulaması GetirFinans XAG fiyatlarını izler. İki geçerli fiyattan büyük olan **alış**, küçük olan **satış** kabul edilir. Günlük fiyat geçmişi uygulamanın kendi özel alanında tutulur ve takvim günü değişince günlük kayıtlar yenilenir.
+Standalone Android uygulaması. GetirFinans XAG fiyatlarını doğrudan çeker; iki fiyatın büyüğü **ALIŞ**, küçüğü **SATIŞ** kabul edilir.
 
-Gemini API key isteğe bağlıdır. Key yoksa fiyat takibi ve bildirimler çalışır; yalnızca AI analizi devre dışı kalır.
+## Özellikler
+- Site kontrol aralığı saniye cinsinden. 40 saniye ve üzeri önerilir.
+- Gemini API key uygulama açılışında istenir ve uygulamanın kendi özel depolamasında tutulur.
+- `API KEY YOK` düğmesi Google AI Studio API key sayfasını açar.
+- `bot.py`, Flask, Termux veya localhost bağımlılığı yoktur.
+- Günlük fiyat geçmişi uygulama sandboxındaki `gumus_fiyat_gecmisi.txt` dosyasına kaydedilir.
+- Takvim günü değişince günlük fiyat/AI verileri sıfırlanır; portföy ayarları korunur.
+- Gemini bildirimleri genişletilebilir (BigTextStyle).
+- Fiyat artışı bildirim LED'i yeşil, düşüş kırmızı, Gemini analizi sarıdır.

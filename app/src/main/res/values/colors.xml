@@ -1,12 +1,7 @@
 <resources>
-    <color name="bg">#0B0F14</color>
-    <color name="card">#141A22</color>
-    <color name="card2">#1A2230</color>
-    <color name="text">#F7F9FC</color>
-    <color name="muted">#9AA7B8</color>
-    <color name="silver">#DCE5EF</color>
-    <color name="gold">#D6B36A</color>
-    <color name="green">#3DDC84</color>
-    <color name="red">#FF5C5C</color>
-    <color name="yellow">#FFD54A</color>
+    <color name="bg">#101318</color>
+    <color name="card">#1A1F27</color>
+    <color name="text">#F4F7FA</color>
+    <color name="muted">#9AA6B2</color>
+    <color name="accent">#D6B56D</color>
 </resources>

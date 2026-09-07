@@ -16,7 +16,14 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 
-/** Gemini AI katmanı. */
+/**
+ * Gemini AI katmanı.
+ * bot.py'ye, Termux'a veya localhost sunucusuna bağımlı değildir.
+ * bot.py'deki ana fikirler Android içinde uygulanır:
+ * - generateContent destekleyen modelleri dinamik bulma
+ * - 429/5xx için retry + exponential backoff
+ * - model değiştirirken aynı prompt/veri bağlamını koruma
+ */
 public final class GeminiAnalyzer {
     private static final String PREFS = "gumus";
     private static final String API_KEY_PREF = "gemini_api_key";
@@ -37,11 +44,6 @@ public final class GeminiAnalyzer {
                 .edit().putString(API_KEY_PREF, apiKey == null ? "" : apiKey.trim()).apply();
     }
 
-    public static void clearApiKey(android.content.Context context) {
-        context.getSharedPreferences(PREFS, android.content.Context.MODE_PRIVATE)
-                .edit().remove(API_KEY_PREF).apply();
-    }
-
     public static String getMaskedApiKey(android.content.Context context) {
         String key = getApiKey(context);
         if (key.length() <= 8) return key.isEmpty() ? "Kayıtlı değil" : "••••••••";
@@ -59,7 +61,7 @@ public final class GeminiAnalyzer {
                              String kaydedilenVeriler,
                              long analizDakika) {
         String apiKey = getApiKey(context);
-        if (apiKey.isEmpty()) return "Yapay zekâ kullanılamıyor: API key eklenmedi. Fiyat takibi devam ediyor.";
+        if (apiKey.isEmpty()) return "API anahtarı girilmedi. Ayarlardan Gemini API anahtarını kaydedin.";
 
         String prompt = buildPrompt(gramMiktari, maliyetFiyati, kaydedilenVeriler, analizDakika);
 
