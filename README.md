@@ -1,28 +1,13 @@
-# Gümüş Takip Android
+# Gümüş Takip
 
-GetirFinans XAG sayfasından gümüşün iki fiyatını okur. Uygulamada **iki geçerli fiyat arasındaki büyük değer ALIŞ, küçük değer SATIŞ** kabul edilir.
+Standalone Android uygulaması. GetirFinans XAG fiyatlarını doğrudan çeker; iki fiyatın büyüğü **ALIŞ**, küçüğü **SATIŞ** kabul edilir.
 
-## Mimari
-- Android uygulaması GetirFinans'a doğrudan bağlanır.
-- Gemini API'ye doğrudan bağlanır; `bot.py`, Flask, Termux veya localhost gerekmez.
-- Gemini modeli API'nin `models.list` çıktısından dinamik keşfedilir; önce Flash modelleri denenir.
-- 429 ve geçici 5xx hatalarında yeniden deneme/backoff yapılır; model değişse bile aynı günün veri bağlamı korunur.
-
-## Günlük veri
-Fiyat geçmişi `context.getFilesDir()` altındaki Android uygulama sandboxında `gumus_fiyat_gecmisi.txt` olarak tutulur. `SharedPreferences` içindeki anlık kayıtlar da aynı uygulama sandboxındaki uygulama verisidir.
-
-Takvim günü değiştiğinde:
-- anlık fiyat tablosu temizlenir,
-- günlük fiyat TXT dosyası silinip yeniden oluşturulur,
-- son Gemini cevabı temizlenir.
-
-Portföy miktarı/maliyet ve zamanlama ayarları korunur.
-
-## Paylaşma
-TXT dosyası uygulama dışına yalnızca Android `FileProvider` üzerinden kullanıcı paylaşımıyla çıkarılabilir.
-
-## Gerekli izinler
-Sadece ağ ve uygulamanın ihtiyaç duyduğu Android servis/bildirim izinleri kullanılır. Ortak depolama için `READ/WRITE_EXTERNAL_STORAGE` veya Termux depolama izni gerekmez.
-
-## API anahtarı
-`GeminiAnalyzer.java` içinde mevcut bot.py'deki API anahtarı kullanılmıştır. Kaynak kodu paylaşacaksan bu anahtarı yenilemen ve güvenli bir yapılandırmaya taşıman önerilir.
+## Özellikler
+- Site kontrol aralığı saniye cinsinden. 40 saniye ve üzeri önerilir.
+- Gemini API key uygulama açılışında istenir ve uygulamanın kendi özel depolamasında tutulur.
+- `API KEY YOK` düğmesi Google AI Studio API key sayfasını açar.
+- `bot.py`, Flask, Termux veya localhost bağımlılığı yoktur.
+- Günlük fiyat geçmişi uygulama sandboxındaki `gumus_fiyat_gecmisi.txt` dosyasına kaydedilir.
+- Takvim günü değişince günlük fiyat/AI verileri sıfırlanır; portföy ayarları korunur.
+- Gemini bildirimleri genişletilebilir (BigTextStyle).
+- Fiyat artışı bildirim LED'i yeşil, düşüş kırmızı, Gemini analizi sarıdır.

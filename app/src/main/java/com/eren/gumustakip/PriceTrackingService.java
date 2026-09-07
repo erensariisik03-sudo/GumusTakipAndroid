@@ -2,6 +2,7 @@ package com.eren.gumustakip;
 
 import android.app.*;
 import android.content.*;
+import android.graphics.Color;
 import android.os.*;
 
 import org.json.JSONArray;
@@ -19,7 +20,8 @@ public class PriceTrackingService extends Service {
     public static final String ACTION_STOP = "STOP";
 
     private static final String CHANNEL_STATUS_ID = "gumus_status_channel";
-    private static final String CHANNEL_ALERT_ID = "gumus_alert_channel";
+    private static final String CHANNEL_UP_ID = "gumus_up_channel";
+    private static final String CHANNEL_DOWN_ID = "gumus_down_channel";
     private static final String CHANNEL_AI_ID = "gumus_ai_channel";
     private static final int NOTIFICATION_ID = 2201;
     private static final int LEVEL_NOTIFICATION_ID = 2202;
@@ -44,9 +46,9 @@ public class PriceTrackingService extends Service {
             return START_NOT_STICKY;
         }
 
-        long controlMin = getPositiveLong("control_interval_min", 1);
+        long controlSec = getPositiveLong("control_interval_sec", 60);
         startForeground(NOTIFICATION_ID, buildNotification(CHANNEL_STATUS_ID,
-                "Gümüş takibi çalışıyor", controlMin + " dakikada bir fiyat kontrol ediliyor."));
+                "Gümüş takibi çalışıyor", controlSec + " saniyede bir fiyat kontrol ediliyor.", Color.GRAY));
 
         if (!running) {
             running = true;
@@ -104,7 +106,7 @@ public class PriceTrackingService extends Service {
                 updateForeground("Fiyat alınamadı · tekrar denenecek");
             }
 
-            long intervalMs = getPositiveLong("control_interval_min", 1) * 60_000L;
+            long intervalMs = getPositiveLong("control_interval_sec", 60) * 1000L;
             long sleepMs = Math.max(1000L,
                     intervalMs - (System.currentTimeMillis() - started));
             try {
@@ -169,10 +171,12 @@ public class PriceTrackingService extends Service {
                     sell, lastSell, value, profit, pct);
             NotificationManager nm = getSystemService(NotificationManager.class);
             if (nm != null) {
+                String channel = diff > 0 ? CHANNEL_UP_ID : CHANNEL_DOWN_ID;
+                int ledColor = diff > 0 ? Color.GREEN : Color.RED;
                 nm.notify(LEVEL_NOTIFICATION_ID,
-                        buildNotification(CHANNEL_ALERT_ID,
+                        buildNotification(channel,
                                 "Gümüş " + level + " TL Seviyesinde! (" + direction + ")",
-                                msg));
+                                msg, ledColor));
             }
         }
         lastSell = sell;
@@ -183,12 +187,12 @@ public class PriceTrackingService extends Service {
         long aiMin = getPositiveLong("ai_interval_min", 60);
         System.out.println("🧠 " + aiMin + " dakika doldu. Bugünün kaydedilmiş verileri Gemini'ye gönderiliyor...");
 
-        String answer = GeminiAnalyzer.ask(grams, cost, aiContext, aiMin);
+        String answer = GeminiAnalyzer.ask(this, grams, cost, aiContext, aiMin);
 
         NotificationManager nm = getSystemService(NotificationManager.class);
         if (nm != null) {
             nm.notify(AI_NOTIFICATION_ID,
-                    buildNotification(CHANNEL_AI_ID, "🤖 Gemini Veri Analizi", answer));
+                    buildNotification(CHANNEL_AI_ID, "🤖 Gemini Veri Analizi", answer, Color.YELLOW));
         }
 
         prefs.edit()
@@ -289,26 +293,37 @@ public class PriceTrackingService extends Service {
         }
     }
 
-    private Notification buildNotification(String channelId, String title, String text) {
+    private Notification buildNotification(String channelId, String title, String text, int ledColor) {
         PendingIntent pi = PendingIntent.getActivity(
                 this,
                 0,
                 new Intent(this, MainActivity.class),
                 Build.VERSION.SDK_INT >= 23 ? PendingIntent.FLAG_IMMUTABLE : 0);
-        return new Notification.Builder(this, channelId)
-                .setContentTitle(title)
+
+        Notification.Builder builder = Build.VERSION.SDK_INT >= 26
+                ? new Notification.Builder(this, channelId)
+                : new Notification.Builder(this);
+
+        builder.setContentTitle(title)
                 .setContentText(text)
+                .setStyle(new Notification.BigTextStyle().bigText(text))
                 .setSmallIcon(android.R.drawable.ic_dialog_info)
                 .setContentIntent(pi)
-                .setOngoing(channelId.equals(CHANNEL_STATUS_ID))
-                .build();
+                .setAutoCancel(!channelId.equals(CHANNEL_STATUS_ID))
+                .setOnlyAlertOnce(channelId.equals(CHANNEL_STATUS_ID));
+
+        if (Build.VERSION.SDK_INT < 26) {
+            builder.setLights(ledColor, 500, 1500);
+        }
+        if (channelId.equals(CHANNEL_STATUS_ID)) builder.setOngoing(true);
+        return builder.build();
     }
 
     private void updateForeground(String text) {
         NotificationManager nm = getSystemService(NotificationManager.class);
         if (nm != null) {
             nm.notify(NOTIFICATION_ID,
-                    buildNotification(CHANNEL_STATUS_ID, "Gümüş takibi çalışıyor", text));
+                    buildNotification(CHANNEL_STATUS_ID, "Gümüş takibi çalışıyor", text, Color.GRAY));
         }
     }
 
@@ -316,13 +331,20 @@ public class PriceTrackingService extends Service {
         if (Build.VERSION.SDK_INT >= 26) {
             NotificationManager nm = getSystemService(NotificationManager.class);
             if (nm == null) return;
-            nm.createNotificationChannel(new NotificationChannel(
-                    CHANNEL_STATUS_ID, "Takip durumu", NotificationManager.IMPORTANCE_LOW));
-            nm.createNotificationChannel(new NotificationChannel(
-                    CHANNEL_ALERT_ID, "Fiyat bildirimleri", NotificationManager.IMPORTANCE_HIGH));
-            nm.createNotificationChannel(new NotificationChannel(
-                    CHANNEL_AI_ID, "Gemini veri analizleri", NotificationManager.IMPORTANCE_DEFAULT));
+            // Eski tek renkli kanalın kullanılmasını engelle.
+            nm.deleteNotificationChannel("gumus_alert_channel");
+            createLightChannel(nm, CHANNEL_STATUS_ID, "Takip durumu", NotificationManager.IMPORTANCE_LOW, Color.GRAY, false);
+            createLightChannel(nm, CHANNEL_UP_ID, "Fiyat artışı", NotificationManager.IMPORTANCE_HIGH, Color.GREEN, true);
+            createLightChannel(nm, CHANNEL_DOWN_ID, "Fiyat düşüşü", NotificationManager.IMPORTANCE_HIGH, Color.RED, true);
+            createLightChannel(nm, CHANNEL_AI_ID, "Gemini veri analizleri", NotificationManager.IMPORTANCE_DEFAULT, Color.YELLOW, true);
         }
+    }
+
+    private void createLightChannel(NotificationManager nm, String id, String name, int importance, int color, boolean lights) {
+        NotificationChannel channel = new NotificationChannel(id, name, importance);
+        channel.enableLights(lights);
+        if (lights) channel.setLightColor(color);
+        nm.createNotificationChannel(channel);
     }
 
     private void stopTracking() {

@@ -25,8 +25,8 @@ import java.util.Set;
  * - model değiştirirken aynı prompt/veri bağlamını koruma
  */
 public final class GeminiAnalyzer {
-    // bot.py içindeki anahtar kullanılıyor. Kaynak kodu paylaşırken bu anahtarı yenilemeniz önerilir.
-    private static final String API_KEY = "AQ.Ab8RN6K5mferVKngM-xOg3OK5ZONjyvxQnv8HlJwmgJpKwNfTQ";
+    private static final String PREFS = "gumus";
+    private static final String API_KEY_PREF = "gemini_api_key";
     private static final String API_ROOT = "https://generativelanguage.googleapis.com/v1beta";
 
     private static final int CONNECT_TIMEOUT_MS = 10000;
@@ -35,20 +35,44 @@ public final class GeminiAnalyzer {
 
     private GeminiAnalyzer() {}
 
-    public static String ask(double gramMiktari,
+    public static boolean hasApiKey(android.content.Context context) {
+        return getApiKey(context).length() > 10;
+    }
+
+    public static void saveApiKey(android.content.Context context, String apiKey) {
+        context.getSharedPreferences(PREFS, android.content.Context.MODE_PRIVATE)
+                .edit().putString(API_KEY_PREF, apiKey == null ? "" : apiKey.trim()).apply();
+    }
+
+    public static String getMaskedApiKey(android.content.Context context) {
+        String key = getApiKey(context);
+        if (key.length() <= 8) return key.isEmpty() ? "Kayıtlı değil" : "••••••••";
+        return key.substring(0, 4) + "••••••••" + key.substring(key.length() - 4);
+    }
+
+    private static String getApiKey(android.content.Context context) {
+        return context.getSharedPreferences(PREFS, android.content.Context.MODE_PRIVATE)
+                .getString(API_KEY_PREF, "").trim();
+    }
+
+    public static String ask(android.content.Context context,
+                             double gramMiktari,
                              double maliyetFiyati,
                              String kaydedilenVeriler,
                              long analizDakika) {
+        String apiKey = getApiKey(context);
+        if (apiKey.isEmpty()) return "API anahtarı girilmedi. Ayarlardan Gemini API anahtarını kaydedin.";
+
         String prompt = buildPrompt(gramMiktari, maliyetFiyati, kaydedilenVeriler, analizDakika);
 
-        List<String> models = getAvailableModels();
+        List<String> models = getAvailableModels(apiKey);
         if (models.isEmpty()) {
             models = fallbackModels();
         }
 
         String firstError = null;
         for (String model : models) {
-            GenerateResult result = generateContent(model, prompt);
+            GenerateResult result = generateContent(model, prompt, apiKey);
             if (result.answer != null && !result.answer.trim().isEmpty()) {
                 return result.answer.trim();
             }
@@ -80,10 +104,10 @@ public final class GeminiAnalyzer {
                 + " Bu uygulamadaki alış/satış isimlendirmesini değiştirme.";
     }
 
-    private static List<String> getAvailableModels() {
+    private static List<String> getAvailableModels(String apiKey) {
         List<String> result = new ArrayList<>();
         try {
-            String url = API_ROOT + "/models?key=" + API_KEY;
+            String url = API_ROOT + "/models?key=" + apiKey;
             JSONObject data = getJson(url);
             JSONArray models = data.optJSONArray("models");
             if (models == null) return result;
@@ -140,8 +164,9 @@ public final class GeminiAnalyzer {
         return result;
     }
 
-    private static GenerateResult generateContent(String model, String prompt) {
-        String urlString = API_ROOT + "/models/" + model + ":generateContent?key=" + API_KEY;
+    private static GenerateResult generateContent(String model, String prompt, String apiKeyOverride) {
+        String apiKey = apiKeyOverride == null ? "" : apiKeyOverride;
+        String urlString = API_ROOT + "/models/" + model + ":generateContent?key=" + apiKey;
         JSONObject payload = new JSONObject();
         try {
             JSONArray contents = new JSONArray();
