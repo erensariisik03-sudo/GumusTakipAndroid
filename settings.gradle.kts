@@ -12,5 +12,5 @@ dependencyResolutionManagement {
         mavenCentral()
     }
 }
-rootProject.name = "GumusTakip"
+rootProject.name = "YapayZekaChatAndroid"
 include(":app")

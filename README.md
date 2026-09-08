@@ -1,13 +1,31 @@
-# Gümüş Takip
+# Yapay Zeka Chat – Android
 
-Standalone Android uygulaması. GetirFinans XAG fiyatlarını doğrudan çeker; iki fiyatın büyüğü **ALIŞ**, küçüğü **SATIŞ** kabul edilir.
+Flask, WhatsApp endpoint'i ve Termux arayüzü bu projede yoktur. Uygulama doğrudan Gemini REST API'ye bağlanır.
 
 ## Özellikler
-- Site kontrol aralığı saniye cinsinden. 40 saniye ve üzeri önerilir.
-- Gemini API key uygulama açılışında istenir ve uygulamanın kendi özel depolamasında tutulur.
-- `API KEY YOK` düğmesi Google AI Studio API key sayfasını açar.
-- `bot.py`, Flask, Termux veya localhost bağımlılığı yoktur.
-- Günlük fiyat geçmişi uygulama sandboxındaki `gumus_fiyat_gecmisi.txt` dosyasına kaydedilir.
-- Takvim günü değişince günlük fiyat/AI verileri sıfırlanır; portföy ayarları korunur.
-- Gemini bildirimleri genişletilebilir (BigTextStyle).
-- Fiyat artışı bildirim LED'i yeşil, düşüş kırmızı, Gemini analizi sarıdır.
+
+- Modern Jetpack Compose arayüzü
+- Sohbetleri Room veritabanında kalıcı saklama
+- Eski konuşmaya tıklayıp kaldığın yerden devam etme
+- Android dosya seçici ile birden fazla dosya ekleme
+- Seçilen dosyaları uygulama içine kopyalayıp konuşma ile ilişkilendirme
+- Gemini `generateContent` REST API entegrasyonu
+- Model listesini API'den yenileme ve manuel model seçimi
+- Hata durumunda aynı isteği otomatik olarak 3 denemeye kadar tekrar etme
+- 3 denemeden sonra "Tekrar gönder" ve "Model değiştir" önerileri
+- API anahtarını kaynak koduna gömmeme; cihaz ayarlarında tutma
+- GitHub Actions ile otomatik debug APK derleme ve artifact yayınlama
+
+## Yerelde çalıştırma
+
+Android Studio'da projeyi açıp `app` modülünü çalıştır.
+
+## GitHub
+
+`.github/workflows/build.yml` her `push` ve `pull_request` sonrasında debug APK derler ve artifact olarak yükler.
+
+> Not: Debug APK build için API anahtarına gerek yoktur. API anahtarı uygulamanın Ayarlar ekranından girilir.
+## Custom Modu
+
+Ayarlar bölümünden veya üst bardaki `</>` simgesinden Custom Modu açılabilir. Bu modda istekler `gemini-2.5-flash` modeline, düşük `temperature` (`0.2`) ve `maxOutputTokens` (`500`) ile gönderilir; doğrudan kod üretmeye odaklanan sistem talimatı kullanılır.
+
