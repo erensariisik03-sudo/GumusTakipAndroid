@@ -22,30 +22,40 @@ public class PriceTrackingService extends Service {
     private static final String CHANNEL_STATUS_ID = "gumus_status_channel";
     private static final String CHANNEL_UP_ID = "gumus_up_channel";
     private static final String CHANNEL_DOWN_ID = "gumus_down_channel";
-    private static final String CHANNEL_AI_ID = "gumus_ai_channel";
     private static final int NOTIFICATION_ID = 2201;
     private static final int LEVEL_NOTIFICATION_ID = 2202;
-    private static final int AI_NOTIFICATION_ID = 2203;
+    private long lastSignalReminderMs;
+    private String lastSignalKey = "";
 
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
     private volatile boolean running;
     private Double lastSell;
-    private long lastAiTimeMs;
     private SharedPreferences prefs;
+    private PowerManager.WakeLock wakeLock;
 
     @Override public void onCreate() {
         super.onCreate();
         prefs = getSharedPreferences("gumus", MODE_PRIVATE);
+        PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
+        if (pm != null) {
+            wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, getPackageName() + ":PriceTracking");
+            wakeLock.setReferenceCounted(false);
+        }
         DailyStorage.ensureToday(this);
         createChannels();
     }
 
     @Override public int onStartCommand(Intent intent, int flags, int startId) {
         if (intent != null && ACTION_STOP.equals(intent.getAction())) {
+            prefs.edit().putBoolean("tracking_enabled", false).apply();
             stopTracking();
             return START_NOT_STICKY;
         }
 
+        prefs.edit().putBoolean("tracking_enabled", true).apply();
+        if (wakeLock != null && !wakeLock.isHeld()) {
+            try { wakeLock.acquire(); } catch (SecurityException ignored) { }
+        }
         long controlSec = getPositiveLong("control_interval_sec", 60);
         startForeground(NOTIFICATION_ID, buildNotification(CHANNEL_STATUS_ID,
                 "Gümüş takibi çalışıyor", controlSec + " saniyede bir fiyat kontrol ediliyor.", Color.GRAY));
@@ -53,7 +63,6 @@ public class PriceTrackingService extends Service {
         if (!running) {
             running = true;
             DailyStorage.ensureToday(this);
-            lastAiTimeMs = System.currentTimeMillis();
             lastSell = null;
             executor.execute(this::loop);
         }
@@ -96,11 +105,7 @@ public class PriceTrackingService extends Service {
                 sendUiUpdate(r, grams, cost, timeOnly);
                 notifyLevelChange(r.sell, grams, cost);
 
-                long aiInterval = getPositiveLong("ai_interval_min", 60) * 60_000L;
-                if (System.currentTimeMillis() - lastAiTimeMs >= aiInterval) {
-                    runAiAnalysis(grams, cost);
-                    lastAiTimeMs = System.currentTimeMillis();
-                }
+                evaluateSignal(r, grams);
             } catch (Exception e) {
                 System.out.println("Bağlantı Hatası: " + e.getMessage());
                 updateForeground("Fiyat alınamadı · tekrar denenecek");
@@ -132,12 +137,13 @@ public class PriceTrackingService extends Service {
 
         JSONArray next = new JSONArray();
         try {
-            for (int i = Math.max(0, rows.length() - 29); i < rows.length(); i++) {
+            for (int i = Math.max(0, rows.length() - 99); i < rows.length(); i++) {
                 next.put(rows.get(i));
             }
 
             JSONObject obj = new JSONObject();
             obj.put("time", timeOnly);
+            obj.put("timestamp", System.currentTimeMillis());
             obj.put("buy", r.buy);
             obj.put("sell", r.sell);
             next.put(obj);
@@ -182,86 +188,26 @@ public class PriceTrackingService extends Service {
         lastSell = sell;
     }
 
-    private void runAiAnalysis(double grams, double cost) {
-        String aiContext = buildAiContext();
-        long aiMin = getPositiveLong("ai_interval_min", 60);
-        System.out.println("🧠 " + aiMin + " dakika doldu. Bugünün kaydedilmiş verileri Gemini'ye gönderiliyor...");
-
-        String answer = GeminiAnalyzer.ask(this, grams, cost, aiContext, aiMin);
-
-        NotificationManager nm = getSystemService(NotificationManager.class);
-        if (nm != null) {
-            nm.notify(AI_NOTIFICATION_ID,
-                    buildNotification(CHANNEL_AI_ID, "🤖 Gemini Veri Analizi", answer, Color.YELLOW));
+    private void evaluateSignal(PriceTracker.Result r, double grams) {
+        TradingAlgorithm.Signal signal = TradingAlgorithm.evaluate(this, r.sell, r.buy, grams);
+        if (signal.action.equals("HOLD")) return;
+        String key = signal.action + ":" + (int)Math.floor(r.sell) + ":" + Math.round(signal.fraction*100);
+        long now = System.currentTimeMillis();
+        // First notification, then repeat a reminder every 15 minutes until the user records a response.
+        boolean pending = prefs.getBoolean("signal_pending", false);
+        long answeredAt=prefs.getLong("signal_answered_at",0);
+        if (!pending && now-answeredAt < 60*60_000L) { lastSignalKey=key; return; }
+        if (!key.equals(lastSignalKey) || !pending || now-lastSignalReminderMs >= 15*60_000L) {
+            String message = signal.message(parse(prefs.getString("grams","0")),r.sell,r.buy);
+            prefs.edit().putBoolean("signal_pending",true).putString("signal_key",key)
+                    .putString("signal_action",signal.action).putString("signal_message",message)
+                    .putFloat("signal_price",(float)(signal.action.equals("SELL")?r.sell:r.buy))
+                    .putLong("signal_time",now).apply();
+            NotificationManager nm=getSystemService(NotificationManager.class);
+            if(nm!=null) nm.notify(2204,buildNotification(signal.action.equals("SELL")?CHANNEL_DOWN_ID:CHANNEL_UP_ID,
+                    "Gümüş algoritma önerisi",message+"\nUygulamayı açıp işlemi yaptığını/yapmadığını kaydet.",signal.action.equals("SELL")?Color.RED:Color.GREEN));
+            lastSignalKey=key; lastSignalReminderMs=now;
         }
-
-        prefs.edit()
-                .putString("last_ai_advice", answer)
-                .putString("last_ai_time", new SimpleDateFormat(
-                        "dd.MM.yyyy HH:mm:ss", Locale.getDefault()).format(new Date()))
-                .apply();
-
-        Intent i = new Intent("com.eren.gumustakip.UPDATE_AI");
-        i.setPackage(getPackageName());
-        i.putExtra("advice", answer);
-        sendBroadcast(i);
-    }
-
-    /**
-     * AI artık RAM'deki geçici liste yerine kaydedilmiş veriyi kullanır.
-     * Servis yeniden başlasa da son 30 anlık kayıt ve günün TXT geçmişi gönderilebilir.
-     */
-    private String buildAiContext() {
-        DailyStorage.ensureToday(this);
-        StringBuilder sb = new StringBuilder();
-        sb.append("SON 30 KAYIT:\n");
-
-        try {
-            JSONArray rows = new JSONArray(prefs.getString("live_rows", "[]"));
-            if (rows.length() == 0) {
-                sb.append("Veri yok.\n");
-            } else {
-                for (int i = 0; i < rows.length(); i++) {
-                    JSONObject o = rows.getJSONObject(i);
-                    sb.append(String.format(Locale.US,
-                            "%s | Alış: %.4f TL | Satış: %.4f TL\n",
-                            o.optString("time", ""),
-                            o.optDouble("buy", 0),
-                            o.optDouble("sell", 0)));
-                }
-            }
-        } catch (Exception e) {
-            sb.append("Anlık tablo okunamadı.\n");
-        }
-
-        sb.append("\nBUGÜNÜN KAYIT DOSYASI:\n");
-        File file = new File(getFilesDir(), "gumus_fiyat_gecmisi.txt");
-        if (file.exists()) {
-            try {
-                List<String> lines = readLastLines(file, 80);
-                for (String line : lines) {
-                    sb.append(line).append('\n');
-                }
-            } catch (Exception e) {
-                sb.append("TXT geçmişi okunamadı.\n");
-            }
-        } else {
-            sb.append("TXT dosyası henüz oluşmadı.\n");
-        }
-        return sb.toString().trim();
-    }
-
-    private List<String> readLastLines(File file, int maxLines) throws Exception {
-        List<String> lines = new ArrayList<>();
-        try (BufferedReader reader = new BufferedReader(
-                new InputStreamReader(new FileInputStream(file), StandardCharsets.UTF_8))) {
-            String line;
-            while ((line = reader.readLine()) != null) {
-                lines.add(line);
-                if (lines.size() > maxLines) lines.remove(0);
-            }
-        }
-        return lines;
     }
 
     private synchronized void appendDailyHistory(String line) {
@@ -336,7 +282,6 @@ public class PriceTrackingService extends Service {
             createLightChannel(nm, CHANNEL_STATUS_ID, "Takip durumu", NotificationManager.IMPORTANCE_LOW, Color.GRAY, false);
             createLightChannel(nm, CHANNEL_UP_ID, "Fiyat artışı", NotificationManager.IMPORTANCE_HIGH, Color.GREEN, true);
             createLightChannel(nm, CHANNEL_DOWN_ID, "Fiyat düşüşü", NotificationManager.IMPORTANCE_HIGH, Color.RED, true);
-            createLightChannel(nm, CHANNEL_AI_ID, "Gemini veri analizleri", NotificationManager.IMPORTANCE_DEFAULT, Color.YELLOW, true);
         }
     }
 
@@ -349,12 +294,24 @@ public class PriceTrackingService extends Service {
 
     private void stopTracking() {
         running = false;
+        releaseWakeLock();
         stopForeground(true);
         stopSelf();
     }
 
+    private void releaseWakeLock() {
+        try { if (wakeLock != null && wakeLock.isHeld()) wakeLock.release(); }
+        catch (RuntimeException ignored) { }
+    }
+
+    @Override public void onTaskRemoved(Intent rootIntent) {
+        // Foreground service is deliberately independent of the activity/task UI.
+        super.onTaskRemoved(rootIntent);
+    }
+
     @Override public void onDestroy() {
         running = false;
+        releaseWakeLock();
         executor.shutdownNow();
         super.onDestroy();
     }
