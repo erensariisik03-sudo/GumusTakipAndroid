@@ -1,7 +1,9 @@
 name: Build APK
 
+# Her main/master push'unda tek otomatik derleme.
+# workflow_dispatch kaldırıldı; böylece commit sonrası ayrıca elle başlatıp
+# aynı proje için ikinci bir workflow çalıştırılmaz.
 on:
-  workflow_dispatch:
   push:
     branches:
       - main
@@ -10,9 +12,17 @@ on:
 permissions:
   contents: read
 
+# Aynı dal için yeni bir derleme başlarsa eski çalışmayı iptal et.
+concurrency:
+  group: gumus-takip-apk-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      ANDROID_HOME: /usr/local/lib/android/sdk
+      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
 
     steps:
       - name: Checkout
@@ -24,12 +34,24 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Install Android SDK 33
+      # android-actions/setup-android@v3 kaldırıldı. Paylaşılan günlükte bu
+      # action, artık bulunmayan "tools" SDK paketini kurmaya çalışıp duruyordu.
+      - name: Install Android SDK packages
+        shell: bash
         run: |
-          sdkmanager "platform-tools" "platforms;android-33" "build-tools;33.0.2"
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          if [[ ! -x "$SDKMANAGER" ]]; then
+            SDKMANAGER="$(find "$ANDROID_HOME/cmdline-tools" -type f -name sdkmanager | sort -V | tail -n 1)"
+          fi
+          if [[ ! -x "$SDKMANAGER" ]]; then
+            echo "HATA: Android sdkmanager bulunamadı: $ANDROID_HOME/cmdline-tools"
+            exit 1
+          fi
+          yes | "$SDKMANAGER" --sdk_root="$ANDROID_HOME" --licenses
+          "$SDKMANAGER" --sdk_root="$ANDROID_HOME" --install \
+            "platform-tools" \
+            "platforms;android-34" \
+            "build-tools;34.0.0"
 
       - name: Set up Gradle 8.9
         uses: gradle/actions/setup-gradle@v4
