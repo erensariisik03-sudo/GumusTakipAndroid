@@ -1,8 +1,6 @@
 name: Build APK
 
-# Her main/master push'unda tek otomatik derleme.
-# workflow_dispatch kaldırıldı; böylece commit sonrası ayrıca elle başlatıp
-# aynı proje için ikinci bir workflow çalıştırılmaz.
+# main/master dallarına push başına tek otomatik derleme.
 on:
   push:
     branches:
@@ -12,7 +10,7 @@ on:
 permissions:
   contents: read
 
-# Aynı dal için yeni bir derleme başlarsa eski çalışmayı iptal et.
+# Aynı dalda yeni bir çalışma başlatılırsa önceki çalışma iptal edilir.
 concurrency:
   group: gumus-takip-apk-${{ github.ref }}
   cancel-in-progress: true
@@ -34,20 +32,45 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      # android-actions/setup-android@v3 kaldırıldı. Paylaşılan günlükte bu
-      # action, artık bulunmayan "tools" SDK paketini kurmaya çalışıp duruyordu.
-      - name: Install Android SDK packages
+      - name: Install Android SDK packages and accept licenses
         shell: bash
         run: |
+          set -euo pipefail
           SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
           if [[ ! -x "$SDKMANAGER" ]]; then
             SDKMANAGER="$(find "$ANDROID_HOME/cmdline-tools" -type f -name sdkmanager | sort -V | tail -n 1)"
           fi
           if [[ ! -x "$SDKMANAGER" ]]; then
-            echo "HATA: Android sdkmanager bulunamadı: $ANDROID_HOME/cmdline-tools"
+            echo "ERROR: Android sdkmanager not found under $ANDROID_HOME/cmdline-tools"
             exit 1
           fi
-          yes | "$SDKMANAGER" --sdk_root="$ANDROID_HOME" --licenses
+
+          # Use a finite here-document rather than `yes | sdkmanager`.
+          # `yes` gets SIGPIPE after sdkmanager exits and can fail the step even
+          # when sdkmanager has already accepted every license.
+          "$SDKMANAGER" --sdk_root="$ANDROID_HOME" --licenses <<'LICENSES'
+          y
+          y
+          y
+          y
+          y
+          y
+          y
+          y
+          y
+          y
+          y
+          y
+          y
+          y
+          y
+          y
+          y
+          y
+          y
+          y
+          LICENSES
+
           "$SDKMANAGER" --sdk_root="$ANDROID_HOME" --install \
             "platform-tools" \
             "platforms;android-34" \
