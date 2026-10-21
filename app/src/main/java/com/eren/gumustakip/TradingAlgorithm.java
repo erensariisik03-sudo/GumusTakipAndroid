@@ -69,10 +69,11 @@ public final class TradingAlgorithm {
         public final double budgetTl; // alımda harcanacak TL
         public final double price;    // işlem fiyatı TL/g
         public final boolean strong;
-        public final String message;  // bildirim/ekran metni
-        Signal(String action, double fraction, double grams, double budgetTl, double price, boolean strong, String message) {
+        public final String message;  // bildirim/ekran metni (kısa, sade)
+        public final String detail;   // teknik sayılar (isteğe bağlı gösterilir)
+        Signal(String action, double fraction, double grams, double budgetTl, double price, boolean strong, String message, String detail) {
             this.action = action; this.fraction = fraction; this.grams = grams;
-            this.budgetTl = budgetTl; this.price = price; this.strong = strong; this.message = message;
+            this.budgetTl = budgetTl; this.price = price; this.strong = strong; this.message = message; this.detail = detail;
         }
         public boolean isHold() { return "HOLD".equals(action); }
     }
@@ -81,19 +82,19 @@ public final class TradingAlgorithm {
 
     public static Signal evaluate(List<Tick> ticks, long now, Position pos) {
         if (ticks == null || ticks.size() < 5)
-            return hold("Veri biriktiriliyor (en az ~40 dk fiyat geçmişi gerekir).");
+            return hold("Veri toplanıyor, birazdan başlayacak.", "En az ~40 dk fiyat geçmişi gerekir.");
         Tick cur = ticks.get(ticks.size() - 1);
-        if (now - cur.ts > MAX_DATA_AGE_MS) return hold("Güncel fiyat verisi yok, sinyal üretilmiyor.");
+        if (now - cur.ts > MAX_DATA_AGE_MS) return hold("Güncel fiyat alınamıyor, öneri üretilmiyor.", "Son veri 5 dk'dan eski.");
 
         double v10 = slopePerHour(ticks, now, 10), v30 = slopePerHour(ticks, now, 30), v60 = slopePerHour(ticks, now, 60);
         double c10 = change(ticks, now, 10), c15 = change(ticks, now, 15), c30 = change(ticks, now, 30), c60 = change(ticks, now, 60);
         if (nan(v10) || nan(v30) || nan(v60) || nan(c30))
-            return hold("Veri biriktiriliyor (10/30/60 dk pencereleri için ~40 dk geçmiş gerekir).");
+            return hold("Veri toplanıyor, birazdan başlayacak.", "10/30/60 dk pencereleri için ~40 dk geçmiş gerekir.");
 
         double spread = medianSpread(ticks, now, 60, cur);
         double range60 = range(ticks, now, 60);
         double moveReq = Math.max(MIN_MOVE_TL, SPREAD_FACTOR * spread);                 // anlamlı hareket
-        double dist = Math.max(Math.max(MIN_MOVE_TL, DIST_SPREAD_FACTOR * spread), DIST_RANGE_FACTOR * range60);     // zirveden geri çekilme mesafesi
+        double dist = Math.max(Math.max(MIN_MOVE_TL, DIST_SPREAD_FACTOR * spread), DIST_RANGE_FACTOR * range60); // geri çekilme mesafesi
 
         long since = now - REF_LOOKBACK_MIN * 60_000L;
         if (pos.lastTradeTs > since) since = pos.lastTradeTs;
@@ -106,12 +107,15 @@ public final class TradingAlgorithm {
         double drop = refHigh - cur.sell;   // zirveden düşüş
         double bounce = cur.buy - refLow;   // dipten toparlanma
 
-        String trend = String.format(Locale.US, "10 dk %s · 30 dk %s · 60 dk %s TL | hız %+.1f TL/sa",
-                fmtChg(c10), fmtChg(c30), fmtChg(c60), v30);
-        String status = String.format(Locale.US, "Fark (spread) %.2f TL · zirveden düşüş %.2f TL · dipten çıkış %.2f TL", spread, drop, bounce);
+        // Teknik detay (ekranda isteğe bağlı gösterilir)
+        String detail = "10 dk " + fmtChg(c10) + " · 30 dk " + fmtChg(c30) + " · 60 dk " + fmtChg(c60) + " TL"
+                + "\nHız: " + Fmt.signed2(v30) + " TL/saat"
+                + "\nAlış-satış farkı: " + Fmt.n2(spread) + " TL"
+                + "\nZirveden düşüş: " + Fmt.n2(drop) + " TL · dipten çıkış: " + Fmt.n2(bounce) + " TL";
+        String last30 = nan(c30) ? "" : "\nSon 30 dk fiyat: " + Fmt.signed2(c30) + " TL";
 
         if (pos.lastTradeTs > 0 && now - pos.lastTradeTs < MIN_TRADE_GAP_MIN * 60_000L)
-            return hold(String.format(Locale.US, "Son işlemden sonra bekleme süresi (%d dk). %s", MIN_TRADE_GAP_MIN, trend));
+            return hold("Son işleminden sonra biraz bekleniyor, yeni öneri sonra gelecek.", detail);
 
         boolean down = v10 < 0 && v30 < 0 && v60 < 0 && c30 <= -moveReq;
         boolean up = v10 > 0 && v30 > 0 && v60 > 0 && c30 >= moveReq;
@@ -124,20 +128,22 @@ public final class TradingAlgorithm {
             if (trendExit || profitReversal) {
                 boolean strong = (!nan(c15) && c15 <= -2 * moveReq) || drop >= 2.5 * dist;
                 if (gain < 0 && !strong)
-                    return hold("Düşüş var ama pozisyon zararda ve düşüş henüz güçlü değil; satış zararı kilitler. " + trend);
+                    return hold("Fiyat düşüyor ama şu an zarardasın; satmak zararı kesinleştirir. Düşüş hızlanırsa haber veririm.", detail);
                 double fraction = strong ? FRACTION_STRONG : FRACTION_NORMAL;
                 double g = pos.grams * fraction;
-                if (g < MIN_TRADE_GRAMS) return hold("Düşüş var ancak satılabilir miktar çok küçük. " + trend);
+                if (g < MIN_TRADE_GRAMS) return hold("Fiyat düşüyor ama satılacak miktar çok küçük.", detail);
                 String why = profitReversal && !trendExit
-                        ? "Kârdasın ve yükseliş yön değiştirdi: kârı korumak için sat."
-                        : "Düşüş 10/30/60 dk'da teyit edildi ve zirveden geri çekilme eşiği aşıldı.";
+                        ? "Kârdasın ve fiyat geri dönmeye başladı; kârını korumak için."
+                        : "Fiyat düşüyor ve düşüş sürüyor.";
+                if (strong) why += " Düşüş hızlı olduğu için miktar yarısı.";
+                double est = g * gain;
                 StringBuilder m = new StringBuilder();
-                m.append(String.format(Locale.US, "SAT: elindekinin %s'i ≈ %.3f g\n", fracText(fraction), g));
-                m.append(String.format(Locale.US, "Fiyat: %.2f TL/g (≈ %.0f TL)\n", cur.sell, g * cur.sell));
-                m.append(String.format(Locale.US, "Ort. maliyetine göre tahmini K/Z: %+.2f TL\n", g * gain));
-                m.append(trend).append('\n').append(status).append('\n').append(why);
-                if (strong) m.append("\nDüşüş hızlı olduğu için ").append(fracText(FRACTION_STRONG)).append(" önerildi.");
-                return new Signal("SELL", fraction, g, 0, cur.sell, strong, m.toString());
+                m.append("SAT: ").append(Fmt.gram(g)).append(" gram sat (elindekinin ").append(fracWords(fraction)).append(")\n");
+                m.append("Fiyat: ").append(Fmt.n2(cur.sell)).append(" TL/g · toplam ≈ ").append(Fmt.tl(g * cur.sell)).append('\n');
+                m.append("Neden: ").append(why).append('\n');
+                m.append(est >= 0 ? "Bu satıştan tahmini kâr: " : "Bu satıştan tahmini zarar: ").append(Fmt.stl(est));
+                m.append(last30);
+                return new Signal("SELL", fraction, g, 0, cur.sell, strong, m.toString(), detail);
             }
         }
 
@@ -147,8 +153,7 @@ public final class TradingAlgorithm {
         if (trendBuy || rebound) {
             if ("SELL".equals(pos.lastTradeType) && now - pos.lastTradeTs <= REBUY_GUARD_MIN * 60_000L
                     && cur.buy > pos.lastTradePrice) {
-                return hold(String.format(Locale.US, "Alım sinyali var ama son satışından (%.2f) daha pahalıya geri alım önerilmiyor (şimdi %.2f). %s",
-                        pos.lastTradePrice, cur.buy, trend));
+                return hold("Alım fırsatı var ama az önce sattığından (" + Fmt.n2(pos.lastTradePrice) + " TL) daha pahalı; beklemek daha iyi.", detail);
             }
             boolean strong = trendBuy && !nan(c15) && c15 >= 2 * moveReq && v10 >= v30;
             double fraction = strong ? FRACTION_STRONG : FRACTION_NORMAL;
@@ -156,32 +161,32 @@ public final class TradingAlgorithm {
             double basis = cashKnown ? pos.cash : pos.grams * cur.sell;
             double budget = basis * fraction;
             double g = budget > 0 ? budget / cur.buy : 0;
-            if (budget > 0 && g < MIN_TRADE_GRAMS) return hold("Alım sinyali var ama ayrılan nakit çok az. " + trend);
-            String why = trendBuy
-                    ? "Yükseliş 10/30/60 dk'da teyit edildi."
-                    : "Büyük düşüş sonrası toparlanma başladı.";
+            if (budget > 0 && g < MIN_TRADE_GRAMS) return hold("Alım fırsatı var ama ayırdığın nakit çok az.", detail);
+            String why = trendBuy ? "Fiyat düzenli şekilde yükseliyor." : "Sert düşüşten sonra fiyat toparlanıyor.";
+            if (strong) why += " Yükseliş hızlı olduğu için miktar yarısı.";
             StringBuilder m = new StringBuilder();
             if (budget > 0) {
-                m.append(String.format(Locale.US, "AL: %s'i ≈ %.0f TL → ≈ %.3f g\n", cashKnown ? "nakdinin " + fracText(fraction) : "portföy değerinin " + fracText(fraction), budget, g));
-                if (!cashKnown) m.append("(Nakit girilmediği için portföy değeri baz alındı; Portföy kartına nakit gir.)\n");
+                m.append("AL: ").append(Fmt.gram(g)).append(" gram al (").append(cashKnown ? "nakdinin " : "portföy değerinin ")
+                        .append(fracWords(fraction)).append(" ≈ ").append(Fmt.tl(budget)).append(")\n");
             } else {
-                m.append("AL: tutar hesaplanamadı (Portföy kartına nakit gir).\n");
+                m.append("AL: miktarı hesaplayamadım, Portföy kartına nakit tutarını yaz.\n");
             }
-            m.append(String.format(Locale.US, "Fiyat: %.2f TL/g\n", cur.buy));
-            m.append(trend).append('\n').append(status).append('\n').append(why);
-            if (strong) m.append("\nYükseliş hızlandığı için ").append(fracText(FRACTION_STRONG)).append(" önerildi.");
-            return new Signal("BUY", fraction, g, budget, cur.buy, strong, m.toString());
+            m.append("Fiyat: ").append(Fmt.n2(cur.buy)).append(" TL/g\n");
+            m.append("Neden: ").append(why);
+            if (budget > 0 && !cashKnown) m.append("\n(Nakit girilmediği için portföy değeri baz alındı.)");
+            m.append(last30);
+            return new Signal("BUY", fraction, g, budget, cur.buy, strong, m.toString(), detail);
         }
 
-        return hold("Tutarlı sinyal yok. " + trend + " · " + status);
+        return hold("Şimdilik bekle: net bir yön yok.", detail);
     }
 
     // ---------------------------- yardımcılar ----------------------------
 
-    private static Signal hold(String why) { return new Signal("HOLD", 0, 0, 0, 0, false, why); }
+    private static Signal hold(String why, String detail) { return new Signal("HOLD", 0, 0, 0, 0, false, why, detail); }
     private static boolean nan(double d) { return Double.isNaN(d); }
-    private static String fmtChg(double d) { return nan(d) ? "—" : String.format(Locale.US, "%+.2f", d); }
-    private static String fracText(double f) { return f <= 0.26 ? "1/4" : f <= 0.51 ? "1/2" : String.format(Locale.US, "%.0f%%", f * 100); }
+    private static String fmtChg(double d) { return nan(d) ? "—" : Fmt.signed2(d); }
+    private static String fracWords(double f) { return f <= 0.26 ? "1/4'ü" : f <= 0.51 ? "yarısı" : String.format(Locale.US, "%%%.0f'i", f * 100); }
 
     /** Pencere içindeki orta fiyatın en küçük kareler eğimi (TL/saat). Yetersiz veri → NaN. */
     public static double slopePerHour(List<Tick> t, long now, int minutes) {

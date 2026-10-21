@@ -138,12 +138,18 @@ public final class Portfolio {
         return pos;
     }
 
-    /** Ekranda ve bildirimde kullanılan K/Z özeti. */
+    /** Ana ekrandaki kısa özet. */
     public String summary(double sell) {
-        double tp = totalPnl(sell);
-        return String.format(Locale.US,
-                "Eldeki: %.3f g · ort. maliyet %.2f TL/g\nPortföy değeri: %.2f TL\nEldeki miktarın K/Z: %+.2f TL\nGerçekleşmiş K/Z: %+.2f TL\n"
-                        + "BAŞLANGIÇTAN BERİ TOPLAM K/Z: %+.2f TL (%+.2f%%)\nİlk girilen %.3f g hiç satılmasaydı: %+.2f TL",
-                grams(), cost(), value(sell), unrealized(sell), realized(), tp, totalPnlPct(sell), initialGrams(), holdPnl(sell));
+        return "Eldeki: " + Fmt.gram(grams()) + " g · ortalama maliyet " + Fmt.n2(cost()) + " TL/g\n"
+                + "Değeri: " + Fmt.tl(value(sell)) + "\n"
+                + "Başlangıçtan beri K/Z: " + Fmt.stl(totalPnl(sell)) + " (" + Fmt.pct(totalPnlPct(sell)) + ")\n"
+                + "Hiç satmasaydın: " + Fmt.stl(holdPnl(sell));
+    }
+
+    /** İşlem geçmişi penceresindeki ayrıntılı döküm. */
+    public String details(double sell) {
+        return summary(sell) + "\n\nEldeki miktarın K/Z: " + Fmt.stl(unrealized(sell))
+                + "\nGerçekleşmiş K/Z: " + Fmt.stl(realized())
+                + "\nBaşlangıç: " + Fmt.gram(initialGrams()) + " g × " + Fmt.n2(initialCost()) + " TL/g";
     }
 }

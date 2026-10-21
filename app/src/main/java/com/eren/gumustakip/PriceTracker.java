@@ -53,6 +53,26 @@ public final class PriceTracker {
         }
         if (bestResult != null) return bestResult;
 
+        // Geçerli fiyat çifti yok: piyasa kapalıyken site anormal bir çift gösterebilir (ör. 150 / 50).
+        // Gümüş satırındaki iki sayı birbirinden %10'dan fazla farklıysa bunu hata değil "piyasa kapalı" say.
+        int closedLen = Integer.MAX_VALUE;
+        double closedLo = 0, closedHi = 0;
+        for (Element row : doc.select("div, tr, li, a, section, article")) {
+            String rowText = row.text();
+            int len = rowText.length();
+            if (len >= closedLen) continue;
+            if (!(rowText.contains("XAG") || rowText.toLowerCase(Locale.ROOT).contains("gümüş"))) continue;
+            List<Double> any = extractAnyNumbers(row.select("span[class*=text-b2], span[class*=font-semibold]"), 2);
+            if (any.size() == 2 && any.get(0) > 0 && any.get(1) > 0) {
+                closedLen = len;
+                closedHi = Math.max(any.get(0), any.get(1));
+                closedLo = Math.min(any.get(0), any.get(1));
+            }
+        }
+        if (closedLen != Integer.MAX_VALUE && closedHi / closedLo > 1.10) {
+            throw new MarketClosedException("Piyasa kapalı görünüyor (site " + closedHi + " / " + closedLo + " gösteriyor).");
+        }
+
         // Yedek: Python kodundaki genel metin taramasına benzer şekilde Gümüş/XAG'den sonra gelen ilk iki sayı.
         String bodyText = doc.body() != null ? doc.body().text() : doc.text();
         List<String> textList = new ArrayList<>();
@@ -97,6 +117,23 @@ public final class PriceTracker {
         return prices;
     }
 
+    /** Aralık kontrolü yapmadan ilk sayıları okur (yalnızca piyasa-kapalı tespiti için). */
+    private static List<Double> extractAnyNumbers(Elements elements, int maxCount) {
+        List<Double> out = new ArrayList<>();
+        for (Element element : elements) {
+            Matcher matcher = PRICE_PATTERN.matcher(element.text());
+            while (matcher.find()) {
+                try {
+                    String n = matcher.group();
+                    if (n.contains(",")) n = n.replace(".", "").replace(',', '.');
+                    out.add(Double.parseDouble(n));
+                    if (out.size() >= maxCount) return out;
+                } catch (NumberFormatException ignored) { }
+            }
+        }
+        return out;
+    }
+
     /** Büyük sayı ALIŞ, küçük sayı SATIŞ. Sıralama kaynağın sırasından bağımsızdır. */
     private static Result normalizeFirstTwo(List<Double> prices) {
         if (prices == null || prices.size() < 2) return null;
@@ -120,6 +157,11 @@ public final class PriceTracker {
         } catch (Exception ignored) {
         }
         return null;
+    }
+
+    /** Site piyasa kapalıyken gösterdiği anormal fiyat çiftini verdi. Hata değildir. */
+    public static final class MarketClosedException extends Exception {
+        public MarketClosedException(String message) { super(message); }
     }
 
     public static final class Result {

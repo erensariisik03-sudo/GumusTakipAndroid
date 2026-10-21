@@ -4,4 +4,5 @@
     <color name="text">#F4F7FA</color>
     <color name="muted">#9AA6B2</color>
     <color name="accent">#D6B56D</color>
+    <color name="ic_launcher_background">#0F1B2D</color>
 </resources>

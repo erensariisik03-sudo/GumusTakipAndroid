@@ -97,18 +97,31 @@ public class PriceTrackingService extends Service {
         }
         while (running) {
             long started = System.currentTimeMillis();
-            boolean ok = false;
-            try {
-                PriceTracker.Result r = PriceTracker.fetch();
-                ok = handlePrice(r, started);
-            } catch (Exception e) {
-                handleFailure(e.getMessage());
+            MarketSchedule.Mode mode = MarketSchedule.modeAt(started);
+            boolean night = mode == MarketSchedule.Mode.NIGHT;
+            long normalMs = getPositiveLong("control_interval_sec", 60) * 1000L;
+            long activeMs = night ? Math.max(normalMs, MarketSchedule.NIGHT_POLL_MS) : normalMs; // gece seyrek kontrol
+            long waitMs;
+
+            if (mode == MarketSchedule.Mode.WEEKEND) {
+                // Hafta sonu: hiç istek yapılmaz, yalnızca saat kontrol edilir.
+                enterClosed("Piyasa kapalı (hafta sonu). Pazartesi 00:00'dan sonra kendiliğinden devam eder.");
+                waitMs = MarketSchedule.CLOSED_RECHECK_MS;
+            } else {
+                try {
+                    boolean ok = handlePrice(PriceTracker.fetch(), started, night);
+                    // Başarısız/şüpheli okumada daha kısa aralıkla tekrar dene (gece 1 dk, gündüz 20 sn).
+                    waitMs = ok ? activeMs : Math.min(activeMs, night ? 60_000L : 20_000L);
+                } catch (PriceTracker.MarketClosedException e) {
+                    enterClosed("Piyasa kapalı görünüyor (fiyatlar anormal). Açılınca kendiliğinden devam eder.");
+                    waitMs = MarketSchedule.CLOSED_RECHECK_MS;
+                } catch (Exception e) {
+                    handleFailure(e.getMessage());
+                    waitMs = Math.min(activeMs, night ? 60_000L : 20_000L);
+                }
             }
 
-            long intervalMs = getPositiveLong("control_interval_sec", 60) * 1000L;
-            // Başarısız denemede kısa aralıkla (en az 20 sn) yeniden dene.
-            if (!ok) intervalMs = Math.min(intervalMs, 20_000L);
-            long sleepMs = Math.max(1000L, intervalMs - (System.currentTimeMillis() - started));
+            long sleepMs = Math.max(1000L, waitMs - (System.currentTimeMillis() - started));
             try {
                 Thread.sleep(sleepMs);
             } catch (InterruptedException e) {
@@ -118,11 +131,38 @@ public class PriceTrackingService extends Service {
         }
     }
 
+    /** Piyasa kapalı: öneri/bildirim durur, bekleyen öneri iptal edilir, fiyat kaydedilmez. */
+    private void enterClosed(String note) {
+        boolean wasClosed = "CLOSED".equals(prefs.getString("market_state", "OPEN"));
+        SharedPreferences.Editor e = prefs.edit()
+                .putString("market_state", "CLOSED")
+                .putString("market_note", note)
+                .putString("algo_status", note)
+                .putString("algo_detail", "")
+                .putLong("algo_status_ts", System.currentTimeMillis());
+        if (!wasClosed) {
+            // Açılışta eski referanslarla yanlış "büyük hareket" bildirimi gelmesin.
+            e.putBoolean("signal_pending", false).remove("level_anchor").remove("signal_mismatch_since");
+        }
+        e.apply();
+        failCount = 0;
+        suspectCount = 0;
+        updateForeground(note);
+        if (!wasClosed) {
+            NotificationManager nm = getSystemService(NotificationManager.class);
+            if (nm != null) { nm.cancel(SIGNAL_NOTIFICATION_ID); nm.cancel(LEVEL_NOTIFICATION_ID); }
+            sendUiUpdate();
+        }
+    }
+
     /** Fiyatı doğrular, kaydeder, bildirim ve algoritmayı çalıştırır. Başarılıysa true. */
-    private boolean handlePrice(PriceTracker.Result raw, long now) {
+    private boolean handlePrice(PriceTracker.Result raw, long now, boolean night) throws PriceTracker.MarketClosedException {
         double buy = Math.max(raw.buy, raw.sell);
         double sell = Math.min(raw.buy, raw.sell);
-        if (!acceptPrice(buy, sell)) {
+        // Alış-satış farkı %10'dan büyükse bu gerçek bir fiyat değil, piyasa kapalıyken görünen anormal değerdir.
+        if (sell > 0 && (buy - sell) / sell > 0.10)
+            throw new PriceTracker.MarketClosedException("Anormal fiyat farkı: " + buy + " / " + sell);
+        if (!acceptPrice(buy, sell, now)) {
             handleFailure("Şüpheli fiyat verisi atlandı (" + buy + " / " + sell + ")");
             return false;
         }
@@ -141,7 +181,17 @@ public class PriceTrackingService extends Service {
         saveLiveData(buy, sell, timeOnly, fullTs);
         appendDailyHistory(String.format(Locale.US, "[%s] Alış: %.4f TL | Satış: %.4f TL", fullTs, buy, sell));
 
-        updateForeground(String.format(Locale.US, "Alış %.2f · Satış %.2f · %s", buy, sell, timeOnly));
+        String nightNote = "Gece modu (00:00–07:00): kontrol " + (MarketSchedule.NIGHT_POLL_MS / 60_000L) + " dakikada bir, öneri ve bildirim yok. Sabah kendiliğinden normale döner.";
+        prefs.edit().putString("market_state", night ? "NIGHT" : "OPEN").putString("market_note", night ? nightNote : "").apply();
+
+        if (night && !MarketSchedule.NIGHT_SIGNALS) {
+            prefs.edit().putString("algo_status", nightNote).putString("algo_detail", "").putLong("algo_status_ts", now).apply();
+            updateForeground(String.format(Locale.US, "Gece modu · Satış %s · %s", Fmt.n2(sell), timeOnly));
+            sendUiUpdate();
+            return true;
+        }
+
+        updateForeground(String.format(Locale.US, "Alış %s · Satış %s · %s", Fmt.n2(buy), Fmt.n2(sell), timeOnly));
         sendUiUpdate();
 
         Portfolio pf = new Portfolio(this);
@@ -150,13 +200,13 @@ public class PriceTrackingService extends Service {
         return true;
     }
 
-    /** Çöp/yanlış okunmuş veriyi eler: alış>satış, makul fark, tek seferde %5'ten büyük sıçrama. */
-    private boolean acceptPrice(double buy, double sell) {
+    /** Çöp/yanlış okunmuş veriyi eler: alış>satış ve tek seferde %5'ten büyük sıçrama. */
+    private boolean acceptPrice(double buy, double sell, long now) {
         if (sell <= 0 || buy <= sell) return false;
-        if ((buy - sell) / sell > 0.10) return false;
         if (!ticks.isEmpty()) {
-            double last = ticks.get(ticks.size() - 1).sell;
-            if (last > 0 && Math.abs(sell - last) / last > 0.05) {
+            TradingAlgorithm.Tick lastTick = ticks.get(ticks.size() - 1);
+            boolean recent = now - lastTick.ts < 30 * 60_000L; // uzun ara sonrası (piyasa açılışı) gerçek fark olabilir
+            if (recent && lastTick.sell > 0 && Math.abs(sell - lastTick.sell) / lastTick.sell > 0.05) {
                 // Gerçek bir sıçrama ise 3 ardışık okumada kabul edilir.
                 if (++suspectCount < 3) return false;
             }
@@ -215,15 +265,16 @@ public class PriceTrackingService extends Service {
 
         boolean up = diff > 0;
         double c15 = TradingAlgorithm.change(ticks, now, 15);
-        String speed = Double.isNaN(c15) ? "" : String.format(Locale.US, "\nSon 15 dk: %+.2f TL", c15);
-        String msg = String.format(Locale.US,
-                "Satış: %.2f TL (önceki bildirim: %.2f TL)%s\nEldeki: %.3f g = %.2f TL\nBaşlangıçtan toplam K/Z: %+.2f TL (%+.2f%%)",
-                sell, anchor, speed, pf.grams(), pf.value(sell), pf.totalPnl(sell), pf.totalPnlPct(sell));
+        StringBuilder msg = new StringBuilder();
+        msg.append("Satış fiyatı: ").append(Fmt.n2(sell)).append(" TL/g");
+        if (!Double.isNaN(c15)) msg.append("\nSon 15 dk: ").append(Fmt.signed2(c15)).append(" TL");
+        msg.append("\nEldeki: ").append(Fmt.gram(pf.grams())).append(" g ≈ ").append(Fmt.tl(pf.value(sell)));
+        msg.append("\nBaşlangıçtan beri: ").append(Fmt.stl(pf.totalPnl(sell))).append(" (").append(Fmt.pct(pf.totalPnlPct(sell))).append(")");
         NotificationManager nm = getSystemService(NotificationManager.class);
         if (nm != null) {
             nm.notify(LEVEL_NOTIFICATION_ID, buildNotification(up ? CHANNEL_UP_ID : CHANNEL_DOWN_ID,
-                    String.format(Locale.US, "Gümüş %s %+.2f TL · %.2f TL/g", up ? "📈" : "📉", diff, sell),
-                    msg, up ? Color.GREEN : Color.RED));
+                    (up ? "Gümüş yükseldi 📈 " : "Gümüş düştü 📉 ") + Fmt.signed2(diff) + " TL",
+                    msg.toString(), up ? Color.GREEN : Color.RED));
         }
     }
 
@@ -237,8 +288,8 @@ public class PriceTrackingService extends Service {
 
     private void evaluateSignal(long now, Portfolio pf) {
         TradingAlgorithm.Signal s = TradingAlgorithm.evaluate(ticks, now, pf.toPosition());
-        String head = s.isHold() ? "BEKLE — " : "";
-        prefs.edit().putString("algo_status", head + s.message).putLong("algo_status_ts", now).apply();
+        prefs.edit().putString("algo_status", s.message).putString("algo_detail", s.detail == null ? "" : s.detail)
+                .putLong("algo_status_ts", now).apply();
 
         if (prefs.getBoolean("signal_pending", false)) {
             handlePending(s, now);
@@ -295,7 +346,7 @@ public class PriceTrackingService extends Service {
         NotificationManager nm = getSystemService(NotificationManager.class);
         if (nm != null) {
             nm.notify(SIGNAL_NOTIFICATION_ID, buildNotification(sell ? CHANNEL_DOWN_ID : CHANNEL_UP_ID, title,
-                    s.message + "\n\nUygulamayı açıp işlemi yaptın mı yapmadın mı yanıtla. Otomatik işlem yapılmaz.",
+                    s.message + "\n\nİşlemi yaptıysan uygulamayı açıp yanıtla. Otomatik işlem yapılmaz.",
                     sell ? Color.RED : Color.GREEN));
         }
     }

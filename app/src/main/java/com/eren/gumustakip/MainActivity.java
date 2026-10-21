@@ -35,6 +35,7 @@ public class MainActivity extends Activity {
     private Button startButton, stopButton;
     private AlertDialog signalDialog;
     private long shownSignalTime = -1;
+    private boolean showDetail = false;
 
     private final BroadcastReceiver updateReceiver = new BroadcastReceiver() {
         @Override public void onReceive(Context context, Intent intent) {
@@ -138,7 +139,7 @@ public class MainActivity extends Activity {
         // Anlık veri
         LinearLayout live = card();
         addLabel(live, "ANLIK VERİ");
-        priceView = text("Alış: —\nSatış: —\nSeviye: —", 21, Color.WHITE, true);
+        priceView = text("Alış: —\nSatış: —", 21, Color.WHITE, true);
         live.addView(priceView, matchWrap(0));
         portfolioView = text("Portföy: —", 15, Color.LTGRAY, false);
         live.addView(portfolioView, matchWrap(0));
@@ -146,10 +147,12 @@ public class MainActivity extends Activity {
         live.addView(updateView, matchWrap(0));
         statusView = text("Takip durumu: kapalı", 14, Color.LTGRAY, false);
         live.addView(statusView, matchWrap(0));
-        aiView = text("Algoritma: veri biriktiriliyor.", 14, Color.LTGRAY, false);
+        aiView = text("Algoritma: veri toplanıyor.", 14, Color.LTGRAY, false);
         live.addView(aiView, matchWrap(0));
         Button answerSignal = button("ALGORİTMA BİLDİRİMİNİ YANITLA");
         live.addView(answerSignal, matchWrap(0));
+        Button detailButton = button("ALGORİTMA DETAYINI GÖSTER / GİZLE");
+        live.addView(detailButton, matchWrap(0));
         Button historyButton = button("İŞLEM GEÇMİŞİ / KÂR-ZARAR");
         live.addView(historyButton, matchWrap(0));
         Button resetButton = button("BAŞLANGICI SIFIRLA (K/Z'yi yeniden başlat)");
@@ -176,7 +179,7 @@ public class MainActivity extends Activity {
         data.addView(shareCsv, matchWrap(0));
         root.addView(data, matchWrap(0));
 
-        root.addView(text("Algoritma 10/30/60 dakikalık fiyat hızını ve alış-satış farkını (spread) değerlendirir. Parçalı işlemlerde miktar hiçbir zaman 1/4'ten küçük, 1/2'den büyük önerilmez. İşlem otomatik yapılmaz; kâr garantisi yoktur. Bildirime cevap verilmezse hatırlatma tekrarlanır. Alım-satımı yalnızca gerçekten yaptıysan kaydet.", 13, Color.GRAY, false), matchWrap(0));
+        root.addView(text("Algoritma fiyatın yükseliş/düşüş hızına ve alış-satış farkına bakar. Parçalı işlemlerde miktar 1/4 ile 1/2 arasında önerilir. İşlem otomatik yapılmaz, kâr garantisi yoktur. Hafta sonu ve gece takip yoğunluğu otomatik düşer. Alım-satımı yalnızca gerçekten yaptıysan kaydet.", 13, Color.GRAY, false), matchWrap(0));
 
         startButton.setOnClickListener(v -> startTracking());
         stopButton.setOnClickListener(v -> stopTracking());
@@ -187,6 +190,7 @@ public class MainActivity extends Activity {
             if (!prefs.getBoolean("signal_pending", false)) Toast.makeText(this, "Yanıt bekleyen öneri yok.", Toast.LENGTH_SHORT).show();
             else showPendingSignalIfNeeded(true);
         });
+        detailButton.setOnClickListener(v -> { showDetail = !showDetail; refreshLive(); });
         historyButton.setOnClickListener(v -> showTradeHistory());
         resetButton.setOnClickListener(v -> confirmResetBaseline());
         setContentView(scroll);
@@ -294,22 +298,27 @@ public class MainActivity extends Activity {
         double sell = Portfolio.getD(prefs, "last_sell", 0), buy = Portfolio.getD(prefs, "last_buy", 0);
         String ts = prefs.getString("last_ts", "—");
         if (sell > 0) {
-            priceView.setText(String.format(Locale.US, "Alış: %.4f TL\nSatış: %.4f TL\nSeviye: %d TL", buy, sell, (int) Math.floor(sell)));
-            portfolioView.setText(pf.summary(sell) + String.format(Locale.US, "\nAlım için nakit: %.2f TL · fark (spread): %.2f TL", pf.cash(), buy - sell));
+            priceView.setText("Alış: " + Fmt.n2(buy) + " TL\nSatış: " + Fmt.n2(sell) + " TL");
+            portfolioView.setText(pf.summary(sell) + (pf.cash() > 0 ? "\nAlım için nakit: " + Fmt.tl(pf.cash()) : ""));
             updateView.setText("Son kontrol: " + ts);
         }
-        statusView.setText("Takip durumu: " + (prefs.getBoolean("tracking_enabled", false) ? "aktif" : "kapalı"));
+        String note = prefs.getString("market_note", "");
+        statusView.setText("Takip durumu: " + (prefs.getBoolean("tracking_enabled", false) ? "aktif" : "kapalı")
+                + (prefs.getBoolean("tracking_enabled", false) && !note.isEmpty() ? "\n" + note : ""));
 
         StringBuilder sb = new StringBuilder();
         String status = prefs.getString("algo_status", "");
-        long statusTs = prefs.getLong("algo_status_ts", 0);
-        if (!status.isEmpty()) {
-            sb.append("Algoritma (").append(new SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(new Date(statusTs))).append("):\n").append(status);
-        } else {
-            sb.append("Algoritma: 10/30/60 dk fiyat hızını değerlendirir; veri biriktikçe sinyal üretir. İşlem otomatik yapılmaz.");
+        boolean closedOrNight = !"OPEN".equals(prefs.getString("market_state", "OPEN"));
+        if (!status.isEmpty() && !(closedOrNight && status.equals(note))) {
+            sb.append(status);
+        } else if (status.isEmpty()) {
+            sb.append("Algoritma: veri toplanıyor. İşlem otomatik yapılmaz.");
         }
+        if (sb.length() == 0) sb.append("Algoritma: beklemede.");
         if (prefs.getBoolean("signal_pending", false))
             sb.append("\n\n⚠ Yanıt bekleyen öneri var (").append("SELL".equals(prefs.getString("signal_action", "")) ? "SAT" : "AL").append(").");
+        String detail = prefs.getString("algo_detail", "");
+        if (showDetail && !detail.isEmpty()) sb.append("\n\nDetay:\n").append(detail);
         aiView.setText(sb.toString());
     }
 
@@ -413,17 +422,16 @@ public class MainActivity extends Activity {
         try { log = new JSONArray(prefs.getString("trade_log", "[]")); } catch (Exception e) { log = new JSONArray(); }
         double sell = Portfolio.getD(prefs, "last_sell", 0);
         StringBuilder b = new StringBuilder();
-        if (sell > 0) b.append(pf.summary(sell)).append("\n\n");
-        else b.append(String.format(Locale.US, "Gerçekleşmiş K/Z: %+.2f TL\n\n", pf.realized()));
-        b.append(String.format(Locale.US, "Başlangıç: %.3f g × %.2f TL/g\n\n", pf.initialGrams(), pf.initialCost()));
+        if (sell > 0) b.append(pf.details(sell)).append("\n\n");
+        else b.append("Gerçekleşmiş K/Z: ").append(Fmt.stl(pf.realized())).append("\n\n");
         if (log.length() == 0) b.append("Henüz kaydedilmiş işlem yok.");
         for (int i = log.length() - 1; i >= 0; i--) {
             JSONObject o = log.optJSONObject(i);
             if (o == null) continue;
             boolean isSell = "SELL".equals(o.optString("type"));
             b.append(o.optString("time")).append(" · ").append(isSell ? "SATIŞ" : "ALIŞ")
-                    .append(String.format(Locale.US, " · %.3f g · %.2f TL/g", o.optDouble("grams", 0), o.optDouble("price", 0)));
-            if (isSell) b.append(String.format(Locale.US, " · K/Z %+.2f TL", o.optDouble("realized", 0)));
+                    .append(" · ").append(Fmt.gram(o.optDouble("grams", 0))).append(" g · ").append(Fmt.n2(o.optDouble("price", 0))).append(" TL/g");
+            if (isSell) b.append(" · K/Z ").append(Fmt.stl(o.optDouble("realized", 0)));
             b.append('\n');
         }
         new AlertDialog.Builder(this).setTitle("İşlem geçmişi / K-Z").setMessage(b.toString()).setPositiveButton("Kapat", null).show();
