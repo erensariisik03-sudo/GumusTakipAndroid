@@ -4,6 +4,7 @@ import android.app.*;
 import android.content.*;
 import android.graphics.Color;
 import android.os.*;
+import android.util.Log;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -18,18 +19,29 @@ import java.util.concurrent.Executors;
 public class PriceTrackingService extends Service {
     public static final String ACTION_START = "START";
     public static final String ACTION_STOP = "STOP";
+    private static final String TAG = "GumusTakip";
 
     private static final String CHANNEL_STATUS_ID = "gumus_status_channel";
     private static final String CHANNEL_UP_ID = "gumus_up_channel";
     private static final String CHANNEL_DOWN_ID = "gumus_down_channel";
+    private static final String CHANNEL_INFO_ID = "gumus_info_channel";
     private static final int NOTIFICATION_ID = 2201;
     private static final int LEVEL_NOTIFICATION_ID = 2202;
-    private long lastSignalReminderMs;
-    private String lastSignalKey = "";
+    private static final int SIGNAL_NOTIFICATION_ID = 2204;
+    private static final int INFO_NOTIFICATION_ID = 2205;
+
+    /** Fiyat bu kadar TL oynayınca "artış/azalış" bildirimi gelir. */
+    private static final double LEVEL_STEP_TL = 1.0;
+    /** Cevapsız öneri için hatırlatma aralığı. */
+    private static final long REMIND_MS = 15 * 60_000L;
+    /** Öneri bu kadar süredir artık geçerli değilse iptal edilir. */
+    private static final long EXPIRE_MS = 10 * 60_000L;
 
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
+    private final List<TradingAlgorithm.Tick> ticks = new ArrayList<>();
     private volatile boolean running;
-    private Double lastSell;
+    private int failCount;
+    private int suspectCount;
     private SharedPreferences prefs;
     private PowerManager.WakeLock wakeLock;
 
@@ -57,164 +69,248 @@ public class PriceTrackingService extends Service {
             try { wakeLock.acquire(); } catch (SecurityException ignored) { }
         }
         long controlSec = getPositiveLong("control_interval_sec", 60);
-        startForeground(NOTIFICATION_ID, buildNotification(CHANNEL_STATUS_ID,
-                "Gümüş takibi çalışıyor", controlSec + " saniyede bir fiyat kontrol ediliyor.", Color.GRAY));
+        try {
+            startForeground(NOTIFICATION_ID, buildNotification(CHANNEL_STATUS_ID,
+                    "Gümüş takibi çalışıyor", controlSec + " saniyede bir fiyat kontrol ediliyor.", Color.GRAY));
+        } catch (Exception e) {
+            Log.e(TAG, "Ön plan servisi başlatılamadı", e);
+            stopSelf();
+            return START_NOT_STICKY;
+        }
 
         if (!running) {
             running = true;
             DailyStorage.ensureToday(this);
-            lastSell = null;
             executor.execute(this::loop);
         }
         return START_STICKY;
     }
 
+    // ------------------------------------------------------------------ ana döngü
+
     private void loop() {
+        try {
+            ticks.clear();
+            ticks.addAll(TickStore.load(this, System.currentTimeMillis()));
+        } catch (Exception e) {
+            Log.e(TAG, "Geçmiş yüklenemedi", e);
+        }
         while (running) {
             long started = System.currentTimeMillis();
+            boolean ok = false;
             try {
                 PriceTracker.Result r = PriceTracker.fetch();
-
-                // Savunma: uygulama içinde de kuralı bir kez daha garanti et.
-                double buy = Math.max(r.buy, r.sell);
-                double sell = Math.min(r.buy, r.sell);
-                r = new PriceTracker.Result(buy, sell);
-
-                double grams = parse(prefs.getString("grams", "0"));
-                double cost = parse(prefs.getString("cost", "0"));
-                Date now = new Date();
-                String fullTs = new SimpleDateFormat("dd.MM.yyyy HH:mm:ss", Locale.getDefault()).format(now);
-                String timeOnly = new SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(now);
-
-                saveLiveData(r, timeOnly, fullTs);
-                String record = String.format(Locale.US,
-                        "[%s] Alış: %.4f TL | Satış: %.4f TL", fullTs, r.buy, r.sell);
-                appendDailyHistory(record);
-
-                double portfolioValue = grams * r.sell;
-                double totalCost = grams * cost;
-                double profit = portfolioValue - totalCost;
-                double pct = totalCost > 0 ? (profit / totalCost * 100.0) : 0.0;
-
-                System.out.println("📌 " + record);
-                System.out.println(String.format(Locale.US,
-                        "💰 Portföy: %.2f TL | K/Z: %+.2f TL (%%%.2f)", portfolioValue, profit, pct));
-
-                updateForeground(String.format(Locale.US,
-                        "Alış %.4f · Satış %.4f · %s", r.buy, r.sell, timeOnly));
-                sendUiUpdate(r, grams, cost, timeOnly);
-                notifyLevelChange(r.sell, grams, cost);
-
-                evaluateSignal(r, grams);
+                ok = handlePrice(r, started);
             } catch (Exception e) {
-                System.out.println("Bağlantı Hatası: " + e.getMessage());
-                updateForeground("Fiyat alınamadı · tekrar denenecek");
+                handleFailure(e.getMessage());
             }
 
             long intervalMs = getPositiveLong("control_interval_sec", 60) * 1000L;
-            long sleepMs = Math.max(1000L,
-                    intervalMs - (System.currentTimeMillis() - started));
+            // Başarısız denemede kısa aralıkla (en az 20 sn) yeniden dene.
+            if (!ok) intervalMs = Math.min(intervalMs, 20_000L);
+            long sleepMs = Math.max(1000L, intervalMs - (System.currentTimeMillis() - started));
             try {
                 Thread.sleep(sleepMs);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
+                return;
             }
         }
     }
 
-    private void saveLiveData(PriceTracker.Result r, String timeOnly, String fullTs) {
-        SharedPreferences.Editor e = prefs.edit()
-                .putFloat("last_sell", (float) r.sell)
-                .putFloat("last_buy", (float) r.buy)
-                .putString("last_ts", fullTs);
+    /** Fiyatı doğrular, kaydeder, bildirim ve algoritmayı çalıştırır. Başarılıysa true. */
+    private boolean handlePrice(PriceTracker.Result raw, long now) {
+        double buy = Math.max(raw.buy, raw.sell);
+        double sell = Math.min(raw.buy, raw.sell);
+        if (!acceptPrice(buy, sell)) {
+            handleFailure("Şüpheli fiyat verisi atlandı (" + buy + " / " + sell + ")");
+            return false;
+        }
+        failCount = 0;
+
+        DailyStorage.ensureToday(this);
+        TradingAlgorithm.Tick tick = new TradingAlgorithm.Tick(now, buy, sell);
+        ticks.add(tick);
+        long cutoff = now - TickStore.KEEP_MEMORY_MS;
+        while (!ticks.isEmpty() && ticks.get(0).ts < cutoff) ticks.remove(0);
+        TickStore.append(this, tick);
+
+        Date d = new Date(now);
+        String fullTs = new SimpleDateFormat("dd.MM.yyyy HH:mm:ss", Locale.getDefault()).format(d);
+        String timeOnly = new SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(d);
+        saveLiveData(buy, sell, timeOnly, fullTs);
+        appendDailyHistory(String.format(Locale.US, "[%s] Alış: %.4f TL | Satış: %.4f TL", fullTs, buy, sell));
+
+        updateForeground(String.format(Locale.US, "Alış %.2f · Satış %.2f · %s", buy, sell, timeOnly));
+        sendUiUpdate();
+
+        Portfolio pf = new Portfolio(this);
+        try { notifyLevelChange(now, sell, pf); } catch (Exception e) { Log.e(TAG, "Seviye bildirimi hatası", e); }
+        try { evaluateSignal(now, pf); } catch (Exception e) { Log.e(TAG, "Algoritma hatası", e); }
+        return true;
+    }
+
+    /** Çöp/yanlış okunmuş veriyi eler: alış>satış, makul fark, tek seferde %5'ten büyük sıçrama. */
+    private boolean acceptPrice(double buy, double sell) {
+        if (sell <= 0 || buy <= sell) return false;
+        if ((buy - sell) / sell > 0.10) return false;
+        if (!ticks.isEmpty()) {
+            double last = ticks.get(ticks.size() - 1).sell;
+            if (last > 0 && Math.abs(sell - last) / last > 0.05) {
+                // Gerçek bir sıçrama ise 3 ardışık okumada kabul edilir.
+                if (++suspectCount < 3) return false;
+            }
+        }
+        suspectCount = 0;
+        return true;
+    }
+
+    private void handleFailure(String msg) {
+        failCount++;
+        Log.w(TAG, "Fiyat alınamadı (" + failCount + "): " + msg);
+        updateForeground("Fiyat alınamadı (" + failCount + ". deneme) · tekrar denenecek");
+        if (failCount % 30 == 10) {
+            postInfo("Fiyat verisi alınamıyor",
+                    failCount + " denemedir fiyat okunamadı. İnternet bağlantını ve sitenin açık olduğunu kontrol et. "
+                            + "Veri gelmediği sürece algoritma sinyal üretmez.");
+        }
+    }
+
+    private void saveLiveData(double buy, double sell, String timeOnly, String fullTs) {
+        SharedPreferences.Editor e = prefs.edit();
+        Portfolio.putD(e, "last_sell", sell);
+        Portfolio.putD(e, "last_buy", buy);
+        e.putString("last_ts", fullTs);
 
         JSONArray rows;
-        try {
-            rows = new JSONArray(prefs.getString("live_rows", "[]"));
-        } catch (Exception ex) {
-            rows = new JSONArray();
-        }
-
+        try { rows = new JSONArray(prefs.getString("live_rows", "[]")); } catch (Exception ex) { rows = new JSONArray(); }
         JSONArray next = new JSONArray();
         try {
-            for (int i = Math.max(0, rows.length() - 99); i < rows.length(); i++) {
-                next.put(rows.get(i));
-            }
-
+            for (int i = Math.max(0, rows.length() - 29); i < rows.length(); i++) next.put(rows.get(i));
             JSONObject obj = new JSONObject();
             obj.put("time", timeOnly);
             obj.put("timestamp", System.currentTimeMillis());
-            obj.put("buy", r.buy);
-            obj.put("sell", r.sell);
+            obj.put("buy", buy);
+            obj.put("sell", sell);
             next.put(obj);
-        } catch (Exception ignored) {
-        }
+        } catch (Exception ignored) { }
         e.putString("live_rows", next.toString()).apply();
     }
 
-    private void sendUiUpdate(PriceTracker.Result r, double grams, double cost, String ts) {
+    private void sendUiUpdate() {
         Intent i = new Intent("com.eren.gumustakip.UPDATE_UI");
         i.setPackage(getPackageName());
-        i.putExtra("sell", r.sell);
-        i.putExtra("buy", r.buy);
-        i.putExtra("grams", grams);
-        i.putExtra("cost", cost);
-        i.putExtra("ts", ts);
         sendBroadcast(i);
     }
 
-    private void notifyLevelChange(double sell, double grams, double cost) {
-        int level = (int) Math.floor(sell);
-        if (lastSell != null && (int) Math.floor(lastSell) != level) {
-            double diff = sell - lastSell;
-            String direction = diff > 0 ? "Yükseliş 📈" : "Düşüş 📉";
-            double value = grams * sell;
-            double totalCost = grams * cost;
-            double profit = value - totalCost;
-            double pct = totalCost > 0 ? profit / totalCost * 100.0 : 0;
-            String msg = String.format(Locale.US,
-                    "Satış: %.4f TL (Eski: %.4f TL)\nPortföy: %.2f TL\nNet K/Z: %+.2f TL (%+.2f%%)",
-                    sell, lastSell, value, profit, pct);
-            NotificationManager nm = getSystemService(NotificationManager.class);
-            if (nm != null) {
-                String channel = diff > 0 ? CHANNEL_UP_ID : CHANNEL_DOWN_ID;
-                int ledColor = diff > 0 ? Color.GREEN : Color.RED;
-                nm.notify(LEVEL_NOTIFICATION_ID,
-                        buildNotification(channel,
-                                "Gümüş " + level + " TL Seviyesinde! (" + direction + ")",
-                                msg, ledColor));
-            }
+    // ------------------------------------------------------------------ 1 TL bildirimi
+
+    /** Son bildirimden bu yana fiyat en az 1 TL oynadıysa bildirir; sonra referans yeni fiyata çekilir. */
+    private void notifyLevelChange(long now, double sell, Portfolio pf) {
+        double anchor = Portfolio.getD(prefs, "level_anchor", 0);
+        if (anchor <= 0) { saveAnchor(sell); return; }
+        double diff = sell - anchor;
+        if (Math.abs(diff) < LEVEL_STEP_TL) return;
+        saveAnchor(sell);
+
+        boolean up = diff > 0;
+        double c15 = TradingAlgorithm.change(ticks, now, 15);
+        String speed = Double.isNaN(c15) ? "" : String.format(Locale.US, "\nSon 15 dk: %+.2f TL", c15);
+        String msg = String.format(Locale.US,
+                "Satış: %.2f TL (önceki bildirim: %.2f TL)%s\nEldeki: %.3f g = %.2f TL\nBaşlangıçtan toplam K/Z: %+.2f TL (%+.2f%%)",
+                sell, anchor, speed, pf.grams(), pf.value(sell), pf.totalPnl(sell), pf.totalPnlPct(sell));
+        NotificationManager nm = getSystemService(NotificationManager.class);
+        if (nm != null) {
+            nm.notify(LEVEL_NOTIFICATION_ID, buildNotification(up ? CHANNEL_UP_ID : CHANNEL_DOWN_ID,
+                    String.format(Locale.US, "Gümüş %s %+.2f TL · %.2f TL/g", up ? "📈" : "📉", diff, sell),
+                    msg, up ? Color.GREEN : Color.RED));
         }
-        lastSell = sell;
     }
 
-    private void evaluateSignal(PriceTracker.Result r, double grams) {
-        TradingAlgorithm.Signal signal = TradingAlgorithm.evaluate(this, r.sell, r.buy, grams);
-        if (signal.action.equals("HOLD")) return;
-        String key = signal.action + ":" + (int)Math.floor(r.sell) + ":" + Math.round(signal.fraction*100);
-        long now = System.currentTimeMillis();
-        // First notification, then repeat a reminder every 15 minutes until the user records a response.
-        boolean pending = prefs.getBoolean("signal_pending", false);
-        long answeredAt=prefs.getLong("signal_answered_at",0);
-        if (!pending && now-answeredAt < 60*60_000L) { lastSignalKey=key; return; }
-        if (!key.equals(lastSignalKey) || !pending || now-lastSignalReminderMs >= 15*60_000L) {
-            String message = signal.message(parse(prefs.getString("grams","0")),r.sell,r.buy);
-            prefs.edit().putBoolean("signal_pending",true).putString("signal_key",key)
-                    .putString("signal_action",signal.action).putString("signal_message",message)
-                    .putFloat("signal_price",(float)(signal.action.equals("SELL")?r.sell:r.buy))
-                    .putLong("signal_time",now).apply();
-            NotificationManager nm=getSystemService(NotificationManager.class);
-            if(nm!=null) nm.notify(2204,buildNotification(signal.action.equals("SELL")?CHANNEL_DOWN_ID:CHANNEL_UP_ID,
-                    "Gümüş algoritma önerisi",message+"\nUygulamayı açıp işlemi yaptığını/yapmadığını kaydet.",signal.action.equals("SELL")?Color.RED:Color.GREEN));
-            lastSignalKey=key; lastSignalReminderMs=now;
+    private void saveAnchor(double v) {
+        SharedPreferences.Editor e = prefs.edit();
+        Portfolio.putD(e, "level_anchor", v);
+        e.apply();
+    }
+
+    // ------------------------------------------------------------------ algoritma önerisi
+
+    private void evaluateSignal(long now, Portfolio pf) {
+        TradingAlgorithm.Signal s = TradingAlgorithm.evaluate(ticks, now, pf.toPosition());
+        String head = s.isHold() ? "BEKLE — " : "";
+        prefs.edit().putString("algo_status", head + s.message).putLong("algo_status_ts", now).apply();
+
+        if (prefs.getBoolean("signal_pending", false)) {
+            handlePending(s, now);
+            return;
+        }
+        if (s.isHold()) return;
+
+        // Kullanıcı yanıt verdiyse kısa bir soğuma süresinden sonra güncel miktarla yeniden değerlendirilir.
+        long answeredAt = prefs.getLong("signal_answered_at", 0);
+        long cooldown = prefs.getLong("signal_cooldown_ms", 5 * 60_000L);
+        if (now - answeredAt < cooldown) return;
+
+        storeSignal(s, now, true);
+        postSignalNotification(s, now, false);
+    }
+
+    /** Cevapsız öneri: hâlâ geçerliyse hatırlat, uzun süredir geçersizse iptal et. */
+    private void handlePending(TradingAlgorithm.Signal s, long now) {
+        String pendingAction = prefs.getString("signal_action", "");
+        if (s.action.equals(pendingAction)) {
+            double oldFraction = Portfolio.getD(prefs, "signal_fraction", 0);
+            boolean escalated = Math.abs(s.fraction - oldFraction) > 0.01;
+            storeSignal(s, now, false);
+            prefs.edit().remove("signal_mismatch_since").apply();
+            long notifiedAt = prefs.getLong("signal_notified_at", 0);
+            if (escalated || now - notifiedAt >= REMIND_MS) postSignalNotification(s, now, true);
+            return;
+        }
+        long since = prefs.getLong("signal_mismatch_since", 0);
+        if (since == 0) {
+            prefs.edit().putLong("signal_mismatch_since", now).apply();
+        } else if (now - since >= EXPIRE_MS) {
+            prefs.edit().putBoolean("signal_pending", false).remove("signal_mismatch_since").apply();
+            postInfo("Önceki öneri geçersiz oldu", "Piyasa yönü değişti, önceki al/sat önerisi artık geçerli değil. Yeni bir öneri olursa haber verilecek.");
         }
     }
+
+    private void storeSignal(TradingAlgorithm.Signal s, long now, boolean isNew) {
+        SharedPreferences.Editor e = prefs.edit()
+                .putBoolean("signal_pending", true)
+                .putString("signal_action", s.action)
+                .putString("signal_message", s.message);
+        Portfolio.putD(e, "signal_price", s.price);
+        Portfolio.putD(e, "signal_grams", s.grams);
+        Portfolio.putD(e, "signal_fraction", s.fraction);
+        if (isNew) e.putLong("signal_time", now).putLong("signal_notified_at", 0).remove("signal_mismatch_since");
+        e.apply();
+    }
+
+    private void postSignalNotification(TradingAlgorithm.Signal s, long now, boolean reminder) {
+        prefs.edit().putLong("signal_notified_at", now).apply();
+        boolean sell = "SELL".equals(s.action);
+        String title = (sell ? "SAT önerisi" : "AL önerisi") + (reminder ? " (hatırlatma)" : "");
+        NotificationManager nm = getSystemService(NotificationManager.class);
+        if (nm != null) {
+            nm.notify(SIGNAL_NOTIFICATION_ID, buildNotification(sell ? CHANNEL_DOWN_ID : CHANNEL_UP_ID, title,
+                    s.message + "\n\nUygulamayı açıp işlemi yaptın mı yapmadın mı yanıtla. Otomatik işlem yapılmaz.",
+                    sell ? Color.RED : Color.GREEN));
+        }
+    }
+
+    private void postInfo(String title, String text) {
+        NotificationManager nm = getSystemService(NotificationManager.class);
+        if (nm != null) nm.notify(INFO_NOTIFICATION_ID, buildNotification(CHANNEL_INFO_ID, title, text, Color.YELLOW));
+    }
+
+    // ------------------------------------------------------------------ dosya / yardımcılar
 
     private synchronized void appendDailyHistory(String line) {
         DailyStorage.ensureToday(this);
-        File file = new File(getFilesDir(), "gumus_fiyat_gecmisi.txt");
-        try (Writer w = new OutputStreamWriter(
-                new FileOutputStream(file, true), StandardCharsets.UTF_8)) {
+        File file = DailyStorage.getHistoryFile(this);
+        try (Writer w = new OutputStreamWriter(new FileOutputStream(file, true), StandardCharsets.UTF_8)) {
             if (file.length() == 0) {
                 String today = new SimpleDateFormat("dd.MM.yyyy", Locale.getDefault()).format(new Date());
                 w.write("=== TARİH: " + today + " ===\n");
@@ -222,7 +318,7 @@ public class PriceTrackingService extends Service {
             w.write(line);
             w.write("\n");
         } catch (Exception e) {
-            System.out.println("TXT kayıt hatası: " + e.getMessage());
+            Log.e(TAG, "TXT kayıt hatası", e);
         }
     }
 
@@ -231,21 +327,13 @@ public class PriceTrackingService extends Service {
         return value > 0 ? value : fallback;
     }
 
-    private double parse(String s) {
-        try {
-            return Double.parseDouble(s == null ? "0" : s.trim().replace(",", "."));
-        } catch (Exception e) {
-            return 0;
-        }
-    }
-
     private Notification buildNotification(String channelId, String title, String text, int ledColor) {
-        PendingIntent pi = PendingIntent.getActivity(
-                this,
-                0,
-                new Intent(this, MainActivity.class),
-                Build.VERSION.SDK_INT >= 23 ? PendingIntent.FLAG_IMMUTABLE : 0);
+        Intent open = new Intent(this, MainActivity.class);
+        open.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+        PendingIntent pi = PendingIntent.getActivity(this, 0, open,
+                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
 
+        boolean status = channelId.equals(CHANNEL_STATUS_ID);
         Notification.Builder builder = Build.VERSION.SDK_INT >= 26
                 ? new Notification.Builder(this, channelId)
                 : new Notification.Builder(this);
@@ -255,13 +343,17 @@ public class PriceTrackingService extends Service {
                 .setStyle(new Notification.BigTextStyle().bigText(text))
                 .setSmallIcon(android.R.drawable.ic_dialog_info)
                 .setContentIntent(pi)
-                .setAutoCancel(!channelId.equals(CHANNEL_STATUS_ID))
-                .setOnlyAlertOnce(channelId.equals(CHANNEL_STATUS_ID));
+                .setAutoCancel(!status)
+                .setOnlyAlertOnce(status);
 
         if (Build.VERSION.SDK_INT < 26) {
             builder.setLights(ledColor, 500, 1500);
+            if (!status) {
+                builder.setPriority(Notification.PRIORITY_HIGH);
+                builder.setDefaults(Notification.DEFAULT_SOUND | Notification.DEFAULT_VIBRATE);
+            }
         }
-        if (channelId.equals(CHANNEL_STATUS_ID)) builder.setOngoing(true);
+        if (status) builder.setOngoing(true);
         return builder.build();
     }
 
@@ -277,11 +369,11 @@ public class PriceTrackingService extends Service {
         if (Build.VERSION.SDK_INT >= 26) {
             NotificationManager nm = getSystemService(NotificationManager.class);
             if (nm == null) return;
-            // Eski tek renkli kanalın kullanılmasını engelle.
             nm.deleteNotificationChannel("gumus_alert_channel");
             createLightChannel(nm, CHANNEL_STATUS_ID, "Takip durumu", NotificationManager.IMPORTANCE_LOW, Color.GRAY, false);
-            createLightChannel(nm, CHANNEL_UP_ID, "Fiyat artışı", NotificationManager.IMPORTANCE_HIGH, Color.GREEN, true);
-            createLightChannel(nm, CHANNEL_DOWN_ID, "Fiyat düşüşü", NotificationManager.IMPORTANCE_HIGH, Color.RED, true);
+            createLightChannel(nm, CHANNEL_UP_ID, "Fiyat artışı / AL önerisi", NotificationManager.IMPORTANCE_HIGH, Color.GREEN, true);
+            createLightChannel(nm, CHANNEL_DOWN_ID, "Fiyat düşüşü / SAT önerisi", NotificationManager.IMPORTANCE_HIGH, Color.RED, true);
+            createLightChannel(nm, CHANNEL_INFO_ID, "Bilgi / uyarılar", NotificationManager.IMPORTANCE_DEFAULT, Color.YELLOW, false);
         }
     }
 
@@ -305,7 +397,7 @@ public class PriceTrackingService extends Service {
     }
 
     @Override public void onTaskRemoved(Intent rootIntent) {
-        // Foreground service is deliberately independent of the activity/task UI.
+        // Ön plan servisi aktiviteden bağımsız çalışmaya devam eder.
         super.onTaskRemoved(rootIntent);
     }
 

@@ -34,17 +34,24 @@ public final class PriceTracker {
                 .timeout(15000)
                 .get();
 
-        // Python kodundaki ilk yöntemle aynı: XAG/Gümüş satırındaki hedef span'leri tara.
-        for (Element row : doc.select("div, tr, li")) {
+        // XAG/Gümüş geçen ELEMENTLERİN İÇİNDEN EN KÜÇÜĞÜNÜ (satırın kendisini) seç.
+        // Eski sürüm belge sırasındaki ilk (en dıştaki) div'i alıyordu; o div tüm sayfayı kapsadığı için
+        // sayfadaki ilk iki fiyat (başka bir döviz/emtia) yanlışlıkla gümüş sanılabiliyordu.
+        Result bestResult = null;
+        int bestLen = Integer.MAX_VALUE;
+        for (Element row : doc.select("div, tr, li, a, section, article")) {
             String rowText = row.text();
+            int len = rowText.length();
+            if (len >= bestLen) continue;
             String lower = rowText.toLowerCase(Locale.ROOT);
             if (!(rowText.contains("XAG") || lower.contains("gümüş"))) continue;
 
             Elements spans = row.select("span[class*=text-b2], span[class*=font-semibold]");
             List<Double> prices = extractValidPrices(spans, 2);
             Result result = normalizeFirstTwo(prices);
-            if (result != null) return result;
+            if (result != null) { bestResult = result; bestLen = len; }
         }
+        if (bestResult != null) return bestResult;
 
         // Yedek: Python kodundaki genel metin taramasına benzer şekilde Gümüş/XAG'den sonra gelen ilk iki sayı.
         String bodyText = doc.body() != null ? doc.body().text() : doc.text();

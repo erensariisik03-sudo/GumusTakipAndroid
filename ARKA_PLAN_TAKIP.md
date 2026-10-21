@@ -10,3 +10,6 @@ Bu sürüm, kullanıcı takip düğmesiyle etkinleştirdikten sonra Android ön 
 - Sürekli 40–60 saniyelik kontrol pil tüketir ve internet/sunucu kesintilerini ortadan kaldırmaz. Android hiçbir üçüncü taraf uygulama için kesintisiz çalışma garantisi vermez.
 
 Derleme: GitHub Actions üzerinden `.github/workflows/build-apk.yml` çalıştırılabilir. Bu ortamda Gradle komutu bulunmadığından yerel APK derlemesi doğrulanamamıştır.
+
+## Android 15 notu
+Servis `dataSync` türündedir. `targetSdk` 35'e yükseltilirse Android 15'te dataSync servisleri günde ~6 saat ile sınırlanır ve yeniden başlatma alıcısından başlatılamaz; o durumda servis türü/başlatma yöntemi yeniden ele alınmalıdır. Şimdilik `targetSdk = 34` bırakın.
