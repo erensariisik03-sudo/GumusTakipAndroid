@@ -19,7 +19,7 @@ Android uygulaması GetirFinans XAG fiyatlarını izler ve fiyat **hızına** da
 ## Piyasa saatleri (`MarketSchedule.java`, Türkiye saati)
 - **Hafta sonu (Cmt-Paz):** hiç fiyat çekilmez, öneri/bildirim yok; Pazartesi 00:00'da kendiliğinden devam eder.
 - **Hafta içi gece (00:00-07:00):** 5 dakikada bir kontrol, öneri ve bildirim yok (fiyatlar yine kaydedilir). Gece de öneri istersen `NIGHT_SIGNALS = true`.
-- **Fiyattan tespit:** Site piyasa kapalıyken anormal fiyat gösterirse (ör. 150 / 50, alış-satış farkı %10'dan büyük) uygulama bunu hata saymaz, "piyasa kapalı" durumuna geçer ve 10 dakikada bir tekrar bakar. Resmî açılış/kapanış saatleri takvimde yoktur; bu yüzden Cuma akşamı ve Pazar gecesi bu tespit devreye girer.
+- **Fiyattan tespit:** Site piyasa kapalıyken anormal fiyat gösterirse (ör. 150 / 50, alış-satış farkı 10 TL'den büyük) uygulama bunu hata saymaz, "piyasa kapalı" durumuna geçer ve 10 dakikada bir tekrar bakar. Resmî açılış/kapanış saatleri takvimde yoktur; bu yüzden Cuma akşamı ve Pazar gecesi bu tespit devreye girer.
 
 ## Ayarlar
 Eşikler `TradingAlgorithm.java` en üstündeki sabitlerdedir (`SPREAD_FACTOR`, `DIST_*`, `MIN_TRADE_GAP_MIN`, `FRACTION_*`).

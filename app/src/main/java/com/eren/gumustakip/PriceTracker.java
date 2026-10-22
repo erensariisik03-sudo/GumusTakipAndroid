@@ -22,6 +22,9 @@ public final class PriceTracker {
     private static final Pattern PRICE_PATTERN = Pattern.compile("\\d{2,3}[\\.,]\\d{2,4}");
     private static final Pattern PRICE_RANGE_PATTERN = Pattern.compile("(?i)^([5-9]\\d(?:[\\.,]\\d{2,4})?|1\\d{2}(?:[\\.,]\\d{2,4})?|2\\d{2}(?:[\\.,]\\d{2,4})?)$");
 
+    /** Alış-satış farkı bundan büyükse (TL) bu gerçek fiyat değil, piyasa kapalıyken görünen anormal değerdir. */
+    public static final double MAX_SPREAD_TL = 10.0;
+
     private PriceTracker() {}
 
     public static Result fetch() throws Exception {
@@ -54,7 +57,7 @@ public final class PriceTracker {
         if (bestResult != null) return bestResult;
 
         // Geçerli fiyat çifti yok: piyasa kapalıyken site anormal bir çift gösterebilir (ör. 150 / 50).
-        // Gümüş satırındaki iki sayı birbirinden %10'dan fazla farklıysa bunu hata değil "piyasa kapalı" say.
+        // Gümüş satırındaki iki sayı birbirinden MAX_SPREAD_TL'den fazla farklıysa bunu hata değil "piyasa kapalı" say.
         int closedLen = Integer.MAX_VALUE;
         double closedLo = 0, closedHi = 0;
         for (Element row : doc.select("div, tr, li, a, section, article")) {
@@ -69,8 +72,8 @@ public final class PriceTracker {
                 closedLo = Math.min(any.get(0), any.get(1));
             }
         }
-        if (closedLen != Integer.MAX_VALUE && closedHi / closedLo > 1.10) {
-            throw new MarketClosedException("Piyasa kapalı görünüyor (site " + closedHi + " / " + closedLo + " gösteriyor).");
+        if (closedLen != Integer.MAX_VALUE && closedHi - closedLo > MAX_SPREAD_TL) {
+            throw new MarketClosedException("site " + Fmt.n2(closedHi) + " / " + Fmt.n2(closedLo) + " gösteriyor");
         }
 
         // Yedek: Python kodundaki genel metin taramasına benzer şekilde Gümüş/XAG'den sonra gelen ilk iki sayı.

@@ -379,24 +379,22 @@ public class MainActivity extends Activity {
         final String action = prefs.getString("signal_action", "SELL");
         final boolean sell = "SELL".equals(action);
         double suggestedGrams = Portfolio.getD(prefs, "signal_grams", 0);
-        double nowPrice = Portfolio.getD(prefs, sell ? "last_sell" : "last_buy", 0);
-        if (nowPrice <= 0) nowPrice = Portfolio.getD(prefs, "signal_price", 0);
+        final double marketPrice = Portfolio.getD(prefs, sell ? "last_sell" : "last_buy", 0);
 
         LinearLayout box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
         box.setPadding(dp(20), dp(8), dp(20), 0);
-        final EditText qty = input("Gerçek işlem miktarı (gram)");
-        final EditText price = input("Gerçek işlem fiyatı (TL/gram)");
-        setInput(qty, suggestedGrams, 3);
-        setInput(price, nowPrice, 4);
-        box.addView(text("Miktar (gram) — yalnızca gerçekten yaptığın:", 13, Color.LTGRAY, false), matchWrap(0));
+        final EditText qty = input("Kaç gram?");
+        final EditText price = input(marketPrice > 0 ? "Gram başına TL (şu an: " + Fmt.n2(marketPrice) + ")" : "Gram başına TL");
+        setInput(qty, suggestedGrams, 3); // önerilen miktar hazır yazılı; fiyat bilerek BOŞ bırakılır
+        box.addView(text(sell ? "Kaç gram sattın?" : "Kaç gram aldın?", 14, Color.WHITE, true), matchWrap(0));
         box.addView(qty, matchWrap(0));
-        box.addView(text("Fiyat (TL/gram) — gerçekleşen:", 13, Color.LTGRAY, false), matchWrap(0));
+        box.addView(text(sell ? "Gram başına kaç TL'ye sattın?" : "Gram başına kaç TL'ye aldın?", 14, Color.WHITE, true), matchWrap(0));
         box.addView(price, matchWrap(0));
+        box.addView(text("Bildirimle işlem arasında fiyat/fark değişmiş olabilir; gerçekleşen fiyatı yaz.", 12, Color.LTGRAY, false), matchWrap(0));
 
         final AlertDialog dialog = new AlertDialog.Builder(this)
                 .setTitle(sell ? "Satış kaydı" : "Alım kaydı")
-                .setMessage("Önerilen miktar ve güncel fiyat hazır yazıldı; farklı yaptıysan düzelt.")
                 .setView(box)
                 .setNegativeButton("İptal", null)
                 .setPositiveButton("İşlemi kaydet", null)
@@ -404,7 +402,15 @@ public class MainActivity extends Activity {
         dialog.show();
         // Hata olursa pencere kapanmasın, girilenler kaybolmasın.
         dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
-            String err = pf.recordTrade(action, parse(qty.getText().toString()), parse(price.getText().toString()));
+            double q = parse(qty.getText().toString());
+            double pr = parse(price.getText().toString());
+            if (pr <= 0) { Toast.makeText(this, sell ? "Kaç TL'ye sattığını yaz." : "Kaç TL'ye aldığını yaz.", Toast.LENGTH_LONG).show(); return; }
+            // Toplam tutar yazılmış olabilir; gram başına fiyat güncel fiyattan çok uzaksa uyar.
+            if (marketPrice > 0 && Math.abs(pr - marketPrice) / marketPrice > 0.15) {
+                Toast.makeText(this, "Bu fiyat güncel fiyattan (" + Fmt.n2(marketPrice) + ") çok farklı. Gram başına TL yaz.", Toast.LENGTH_LONG).show();
+                return;
+            }
+            String err = pf.recordTrade(action, q, pr);
             if (err != null) { Toast.makeText(this, err, Toast.LENGTH_LONG).show(); return; }
             // Evet: yeni miktar üzerinden algoritma kısa bir soğumadan sonra yeniden devreye girer.
             prefs.edit().putBoolean("signal_pending", false)

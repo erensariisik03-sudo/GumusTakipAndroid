@@ -113,7 +113,7 @@ public class PriceTrackingService extends Service {
                     // Başarısız/şüpheli okumada daha kısa aralıkla tekrar dene (gece 1 dk, gündüz 20 sn).
                     waitMs = ok ? activeMs : Math.min(activeMs, night ? 60_000L : 20_000L);
                 } catch (PriceTracker.MarketClosedException e) {
-                    enterClosed("Piyasa kapalı görünüyor (fiyatlar anormal). Açılınca kendiliğinden devam eder.");
+                    enterClosed("Piyasa kapalı görünüyor (" + e.getMessage() + "). Açılınca kendiliğinden devam eder.");
                     waitMs = MarketSchedule.CLOSED_RECHECK_MS;
                 } catch (Exception e) {
                     handleFailure(e.getMessage());
@@ -159,9 +159,9 @@ public class PriceTrackingService extends Service {
     private boolean handlePrice(PriceTracker.Result raw, long now, boolean night) throws PriceTracker.MarketClosedException {
         double buy = Math.max(raw.buy, raw.sell);
         double sell = Math.min(raw.buy, raw.sell);
-        // Alış-satış farkı %10'dan büyükse bu gerçek bir fiyat değil, piyasa kapalıyken görünen anormal değerdir.
-        if (sell > 0 && (buy - sell) / sell > 0.10)
-            throw new PriceTracker.MarketClosedException("Anormal fiyat farkı: " + buy + " / " + sell);
+        // Alış-satış farkı 10 TL'den büyükse bu gerçek bir fiyat değil, piyasa kapalıyken görünen anormal değerdir.
+        if (sell > 0 && (buy - sell) > PriceTracker.MAX_SPREAD_TL)
+            throw new PriceTracker.MarketClosedException("site " + Fmt.n2(buy) + " / " + Fmt.n2(sell) + " gösteriyor");
         if (!acceptPrice(buy, sell, now)) {
             handleFailure("Şüpheli fiyat verisi atlandı (" + buy + " / " + sell + ")");
             return false;

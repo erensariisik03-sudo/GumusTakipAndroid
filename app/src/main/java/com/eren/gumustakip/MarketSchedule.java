@@ -9,7 +9,7 @@ import java.util.TimeZone;
  *  - GECE (hafta içi 00:00-07:00): seyrek kontrol, bildirim/öneri yok, fiyatlar yine kaydedilir.
  *  - AÇIK: normal çalışma.
  * Resmî açılış/kapanış saatleri bilinmediği için Cuma akşamı / Pazar gecesi gibi sınır saatlerde
- * piyasanın kapalı olduğu ayrıca FİYATTAN anlaşılır (alış-satış farkı anormalse kapalı sayılır).
+ * piyasanın kapalı olduğu ayrıca FİYATTAN anlaşılır (alış-satış farkı 10 TL'den büyükse kapalı sayılır).
  */
 public final class MarketSchedule {
     public enum Mode { OPEN, NIGHT, WEEKEND }
